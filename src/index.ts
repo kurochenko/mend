@@ -10,6 +10,7 @@ import { getLatestDigestAt } from '@/db/improvement-proposals'
 import { runImprovementDigest } from '@/mastra/improvements/miner'
 import { createEvalsDashboardRoute } from '@/server/evals-dashboard'
 import { recoverInterruptedFixBatches, resumeRunnableFixBatches } from '@/server/fix-batch-runner'
+import { createGithubWebhookRoute } from '@/server/github-webhook'
 import { createImprovementsDashboardRoute } from '@/server/improvements-dashboard'
 import { createGitlabWebhookRoute } from '@/server/gitlab-webhook'
 import {
@@ -151,6 +152,7 @@ const main = async () => {
   app.route('/evals', createEvalsDashboardRoute(config))
   app.route('/improvements', createImprovementsDashboardRoute())
   app.route('/webhooks/gitlab', createGitlabWebhookRoute(config, mastra))
+  app.route('/webhooks/github', createGithubWebhookRoute(config, mastra))
 
   const server = new MastraServer({ app, mastra })
   await server.init()

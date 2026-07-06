@@ -3,9 +3,10 @@ import { resolve } from 'node:path'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
-import type { AppConfig, ProjectConfig } from '@/config'
+import type { AppConfig, GitLabProjectConfig } from '@/config'
 import { enqueueMrReview } from '@/server/mr-review-queue'
-import { processGitlabMergeRequestNote } from '@/server/review-note-events'
+import { processReviewNoteEvent } from '@/server/review-note-events'
+import type { ReviewWebhookEvent } from '@/server/webhook-events'
 
 const FIXTURES_DIR = resolve('fixtures', 'webhooks')
 const RECORDING_CONCURRENCY = 2
@@ -138,28 +139,6 @@ const recordPayload = (projectKey: string, payload: WebhookPayload): void => {
   drainRecordingQueue()
 }
 
-export type WebhookEvent =
-  | {
-      type: 'mr_review_requested'
-      projectKey: string
-      projectId: number
-      mrIid: number
-      title: string
-      description: string
-      labels: string[]
-      sourceBranch: string
-      targetBranch: string
-      url: string
-    }
-  | {
-      type: 'mr_note_received'
-      projectKey: string
-      projectId: number
-      mrIid: number
-      noteId: number
-    }
-  | { type: 'ignored'; reason: string }
-
 export const extractMrLabels = (payload: MrWebhookPayload): string[] => {
   if (payload.labels && payload.labels.length > 0) {
     return payload.labels.map((label) => label.title.trim()).filter((title) => title.length > 0)
@@ -174,7 +153,10 @@ export const extractMrLabels = (payload: MrWebhookPayload): string[] => {
   return []
 }
 
-const classifyMrEvent = (project: ProjectConfig, payload: MrWebhookPayload): WebhookEvent => {
+const classifyMrEvent = (
+  project: GitLabProjectConfig,
+  payload: MrWebhookPayload,
+): ReviewWebhookEvent => {
   const { object_attributes: mr, changes } = payload
 
   if (mr.state !== 'opened') {
@@ -211,7 +193,10 @@ const classifyMrEvent = (project: ProjectConfig, payload: MrWebhookPayload): Web
   }
 }
 
-const classifyNoteEvent = (project: ProjectConfig, payload: NoteWebhookPayload): WebhookEvent => {
+const classifyNoteEvent = (
+  project: GitLabProjectConfig,
+  payload: NoteWebhookPayload,
+): ReviewWebhookEvent => {
   if (payload.object_attributes.noteable_type !== 'MergeRequest' || !payload.merge_request) {
     return { type: 'ignored', reason: 'note not on a merge request' }
   }
@@ -225,7 +210,10 @@ const classifyNoteEvent = (project: ProjectConfig, payload: NoteWebhookPayload):
   }
 }
 
-export const classifyWebhook = (project: ProjectConfig, payload: WebhookPayload): WebhookEvent => {
+export const classifyWebhook = (
+  project: GitLabProjectConfig,
+  payload: WebhookPayload,
+): ReviewWebhookEvent => {
   switch (payload.object_kind) {
     case 'merge_request':
       return classifyMrEvent(project, payload)
@@ -247,6 +235,9 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
     const projectKey = c.req.param('projectKey')
     const project = projects.get(projectKey)
     if (!project) {
+      return c.json({ error: 'unknown project' }, 404)
+    }
+    if (project.platform !== 'gitlab') {
       return c.json({ error: 'unknown project' }, 404)
     }
 
@@ -286,7 +277,7 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
       if (!notePayload) {
         return c.json({ error: 'invalid note payload' }, 400)
       }
-      processGitlabMergeRequestNote({
+      processReviewNoteEvent({
         project,
         mastra,
         payload: notePayload,

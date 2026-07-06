@@ -1,4 +1,5 @@
 import type { ProjectConfig } from '@/config'
+import { createGitHubReviewProvider } from '@/integrations/provider/github'
 import { createGitLabReviewProvider } from '@/integrations/provider/gitlab'
 import type {
   ChangeRequestDetails,
@@ -54,7 +55,9 @@ export const createReviewProvider = (project: ProjectConfig): ReviewProvider => 
   switch (project.platform) {
     case 'gitlab':
       return createGitLabReviewProvider(project)
+    case 'github':
+      return createGitHubReviewProvider(project)
     default:
-      return assertNever(project.platform)
+      return assertNever(project)
   }
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { gitlabApi } from '@/integrations/gitlab/transport'
 
 const discussionAuthorSchema = z
@@ -91,7 +91,7 @@ const mapDiscussion = (discussion: RawDiscussion): Discussion => ({
 })
 
 export const listMrDiscussions = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
 ): Promise<Discussion[]> => {
   const discussions: Discussion[] = []
@@ -117,7 +117,7 @@ export const listMrDiscussions = async (
 }
 
 export const getMrDiscussion = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   discussionId: string,
 ): Promise<Discussion> => {
@@ -130,7 +130,7 @@ export const getMrDiscussion = async (
 }
 
 export const createDiscussion = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   body: string,
 ): Promise<Discussion> => {
@@ -149,7 +149,7 @@ export const createDiscussion = async (
 }
 
 export const resolveDiscussion = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   discussionId: string,
 ): Promise<void> => {
@@ -160,7 +160,7 @@ export const resolveDiscussion = async (
 }
 
 export const replyToDiscussion = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   discussionId: string,
   body: string,

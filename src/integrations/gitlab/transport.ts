@@ -1,4 +1,4 @@
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { ProviderApiError } from '@/integrations/provider/error'
 import { toErrorMessage } from '@/lib/errors'
 
@@ -25,13 +25,13 @@ const retryDelay = (attempt: number, res: Response): number => {
   return BASE_DELAY_MS * 2 ** (attempt - 1)
 }
 
-const buildProjectApiUrl = (project: ProjectConfig, path: string): string => {
+const buildProjectApiUrl = (project: GitLabProjectConfig, path: string): string => {
   const base = new URL(project.url).origin
   const encodedProjectId = encodeURIComponent(project.project_id)
   return `${base}/api/v4/projects/${encodedProjectId}${path}`
 }
 
-const buildGlobalApiUrl = (project: ProjectConfig, path: string): string => {
+const buildGlobalApiUrl = (project: GitLabProjectConfig, path: string): string => {
   const base = new URL(project.url).origin
   return `${base}/api/v4${path}`
 }
@@ -60,7 +60,7 @@ const fetchWithTimeout = async (
 }
 
 export const gitlabApi = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   path: string,
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -111,7 +111,7 @@ export const gitlabApi = async (
 }
 
 export const gitlabApiGlobal = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   path: string,
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,

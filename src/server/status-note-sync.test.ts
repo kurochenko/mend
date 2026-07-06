@@ -191,6 +191,31 @@ describe('upsertStatusNote', () => {
     expect(provider.createNote).toHaveBeenCalledWith(42, 'rendered status body')
     expect(markMrStatusNoteSynced).toHaveBeenCalledWith({ id: 'status-1', noteId: 9 })
   })
+
+  test('recreates local note binding after recoverable patch update failure', async () => {
+    const provider = makeProvider()
+    upsertDesiredMrStatusNote.mockImplementation(() =>
+      Promise.resolve(makeStatusRecord({ noteId: 7, syncAction: 'update' })),
+    )
+    ;(provider.updateNote as ReturnType<typeof mock>).mockImplementationOnce(() =>
+      Promise.reject(
+        new ProviderApiError({
+          message: 'GitHub API 403 PATCH /issues/comments/7',
+          status: 403,
+          method: 'PATCH',
+        }),
+      ),
+    )
+
+    await upsertStatusNote({
+      input: { state: 'running', event: makeEvent() },
+      dependencies: { provider, ...dependencies },
+    })
+
+    expect(markMrStatusNoteForCreate).toHaveBeenCalledWith('status-1')
+    expect(provider.createNote).toHaveBeenCalledWith(42, 'rendered status body')
+    expect(markMrStatusNoteSynced).toHaveBeenCalledWith({ id: 'status-1', noteId: 9 })
+  })
 })
 
 describe('syncStatusNote', () => {

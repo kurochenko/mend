@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { gitlabApi, gitlabApiGlobal } from '@/integrations/gitlab/transport'
 
 export interface DraftNotePosition {
@@ -69,7 +69,7 @@ const currentUserSchema = z.object({
 const currentUserCache = new Map<string, GitLabUser>()
 
 export const createDraftNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   note: string,
   position?: DraftNotePosition,
@@ -93,7 +93,10 @@ export const createDraftNote = async (
   return draftNoteSchema.parse(await res.json())
 }
 
-export const bulkPublishDrafts = async (project: ProjectConfig, mrIid: number): Promise<void> => {
+export const bulkPublishDrafts = async (
+  project: GitLabProjectConfig,
+  mrIid: number,
+): Promise<void> => {
   await gitlabApi(
     project,
     `/merge_requests/${mrIid}/draft_notes/bulk_publish`,
@@ -106,7 +109,7 @@ export const bulkPublishDrafts = async (project: ProjectConfig, mrIid: number): 
 }
 
 export const publishDraftNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   noteId: number,
 ): Promise<void> => {
@@ -122,7 +125,7 @@ export const publishDraftNote = async (
 }
 
 export const listMrDraftNotes = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
 ): Promise<MrDraftNote[]> => {
   const drafts: MrDraftNote[] = []
@@ -153,7 +156,7 @@ export const listMrDraftNotes = async (
 }
 
 export const deleteDraftNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   noteId: number,
 ): Promise<void> => {
@@ -162,7 +165,10 @@ export const deleteDraftNote = async (
   })
 }
 
-export const listMrNotes = async (project: ProjectConfig, mrIid: number): Promise<MrNote[]> => {
+export const listMrNotes = async (
+  project: GitLabProjectConfig,
+  mrIid: number,
+): Promise<MrNote[]> => {
   const notes: MrNote[] = []
   let page = 1
 
@@ -190,7 +196,7 @@ export const listMrNotes = async (project: ProjectConfig, mrIid: number): Promis
   return notes
 }
 
-export const fetchCurrentUser = async (project: ProjectConfig): Promise<GitLabUser> => {
+export const fetchCurrentUser = async (project: GitLabProjectConfig): Promise<GitLabUser> => {
   const cacheKey = `${project.url}:${project.project_id}`
   const cached = currentUserCache.get(cacheKey)
   if (cached) {
@@ -204,7 +210,7 @@ export const fetchCurrentUser = async (project: ProjectConfig): Promise<GitLabUs
 }
 
 export const createMrNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   body: string,
 ): Promise<MrNote> => {
@@ -223,7 +229,7 @@ export const createMrNote = async (
 }
 
 export const updateMrNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   noteId: number,
   body: string,
@@ -243,7 +249,7 @@ export const updateMrNote = async (
 }
 
 export const deleteMrNote = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
   noteId: number,
 ): Promise<void> => {

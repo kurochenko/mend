@@ -208,6 +208,7 @@ export const executePostPlan = async (params: {
   }
 
   const persistedFindings = await persistPostedReviewFindings({
+    project,
     projectKey: input.projectKey,
     mrIid: input.mrIid,
     reviewRunId: input.reviewRunId,

@@ -40,6 +40,7 @@ import { parseMendMarkers } from '@/mastra/review/markers'
 import { normalizeReviewMessageBody } from '@/lib/review-threads'
 import { parseProviderTimestamp } from '@/lib/timestamps'
 import type { ReviewFindingState } from '@/db/schema'
+import type { ReviewNoteEventPayload } from '@/server/webhook-events'
 import {
   markProviderThreadResolved,
   upsertProviderThread,
@@ -62,30 +63,6 @@ const getThreadSyncDependencies = (): Partial<ThreadSyncDependencies> => ({
   upsertReviewThread,
   ...threadSyncDependencyOverrides,
 })
-
-interface GitlabNoteWebhookPayload {
-  project: {
-    id: number
-  }
-  user: {
-    id: number
-    username: string
-  }
-  merge_request?: {
-    iid: number
-  }
-  object_attributes: {
-    id: number
-    note: string
-    noteable_type: string
-    discussion_id?: string
-    created_at?: string
-    updated_at?: string
-    action?: string
-    url?: string
-    system?: boolean
-  }
-}
 
 const findDiscussionForNote = async (
   provider: ReviewProvider,
@@ -120,7 +97,7 @@ const ensureReviewThread = async (params: {
   latestReviewRunId: string | null
 }): Promise<ReviewThreadRecord> => {
   const existing = await getReviewThreadByProviderThreadId({
-    provider: 'gitlab',
+    provider: params.project.platform,
     providerThreadId: params.thread.id,
   })
 
@@ -151,7 +128,7 @@ const refreshExistingThreadFromDiscussion = async (params: {
   return await upsertProviderThread({
     project: {
       key: params.thread.projectKey,
-      project_id: Number(params.thread.repoExternalId),
+      platform: params.thread.provider,
     } as ProjectConfig,
     projectKey: params.thread.projectKey,
     mrIid: params.thread.reviewExternalId,
@@ -317,6 +294,7 @@ const replyAndResolveTriageThread = async (params: {
 
   await params.provider.resolveThread(params.mrIid, params.thread.providerThreadId)
   await markProviderThreadResolved({
+    provider: params.provider.kind,
     providerThreadId: params.thread.providerThreadId,
     dependencies: getThreadSyncDependencies(),
   })
@@ -416,10 +394,10 @@ const applyReviewTriageCommand = async (params: {
 export type { IsNoteAddressedToMendParams }
 export { isNoteAddressedToMend }
 
-export const processGitlabMergeRequestNote = async (params: {
+export const processReviewNoteEvent = async (params: {
   project: ProjectConfig
   mastra?: Mastra
-  payload: GitlabNoteWebhookPayload
+  payload: ReviewNoteEventPayload
 }): Promise<void> => {
   const { project, payload } = params
   const provider = createReviewProvider(project)
@@ -440,7 +418,7 @@ export const processGitlabMergeRequestNote = async (params: {
   const mrIid = payload.merge_request.iid
   const noteId = payload.object_attributes.id
   const noteAction = payload.object_attributes.action ?? 'create'
-  const webhookDiscussionId = payload.object_attributes.discussion_id
+  const webhookDiscussionId = payload.object_attributes.discussion_id ?? undefined
   const directMention = mentionsBot(payload.object_attributes.note, currentUser.username)
 
   if (noteAction !== 'create') {
@@ -454,7 +432,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
   if (webhookDiscussionId) {
     existingThread = await getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerThreadId: webhookDiscussionId,
     })
   }
@@ -492,7 +470,7 @@ export const processGitlabMergeRequestNote = async (params: {
     discussionId = discussion.id
 
     existingThread = await getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerThreadId: discussionId,
     })
     threadMessages = existingThread ? await listReviewMessagesForThread(existingThread.id) : []
@@ -537,7 +515,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
   const createdMessage = await createReviewMessageIfAbsent({
     threadId: thread.id,
-    provider: 'gitlab',
+    provider: project.platform,
     reviewRunId: thread.reviewRunId ?? latestReview?.reviewRunId ?? null,
     authorType: 'human',
     authorExternalId: `${payload.user.id}`,
@@ -556,7 +534,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
   if (!inboundMessage) {
     const existingMessage = await getReviewMessageByProviderMessageId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerMessageId: `${noteId}`,
     })
 
@@ -784,6 +762,7 @@ export const processGitlabMergeRequestNote = async (params: {
     ) {
       await provider.resolveThread(mrIid, discussionId)
       await markProviderThreadResolved({
+        provider: provider.kind,
         providerThreadId: discussionId,
         dependencies: getThreadSyncDependencies(),
       })
@@ -806,3 +785,5 @@ export const processGitlabMergeRequestNote = async (params: {
     throw error
   }
 }
+
+export const processGitlabMergeRequestNote = processReviewNoteEvent

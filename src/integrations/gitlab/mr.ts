@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { gitlabApi } from '@/integrations/gitlab/transport'
 
 interface DiffRefs {
@@ -58,7 +58,7 @@ const gitlabMrChangesSchema = z.object({
 })
 
 export const fetchMrDiffRefs = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
 ): Promise<MrDiffRefs> => {
   const res = await gitlabApi(project, `/merge_requests/${mrIid}`)
@@ -91,7 +91,7 @@ const dedupePaths = (paths: string[]): string[] => {
 }
 
 export const fetchMrChangedFiles = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   mrIid: number,
 ): Promise<MrChangedFiles> => {
   const res = await gitlabApi(project, `/merge_requests/${mrIid}/changes`)
@@ -103,7 +103,7 @@ export const fetchMrChangedFiles = async (
   return { files }
 }
 
-export const fetchMr = async (project: ProjectConfig, mrIid: number): Promise<MrDetails> => {
+export const fetchMr = async (project: GitLabProjectConfig, mrIid: number): Promise<MrDetails> => {
   const res = await gitlabApi(project, `/merge_requests/${mrIid}`)
   const data = gitlabMrSchema.parse(await res.json())
 

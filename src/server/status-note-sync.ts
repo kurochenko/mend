@@ -27,11 +27,7 @@ const defaultDependencies: Omit<StatusNoteSyncDependencies, 'provider'> = {
 }
 
 const isRecoverableStatusNoteUpdateFailure = (error: unknown): boolean => {
-  return (
-    error instanceof ProviderApiError &&
-    error.method === 'PUT' &&
-    (error.status === 404 || error.status === 403)
-  )
+  return error instanceof ProviderApiError && (error.status === 404 || error.status === 403)
 }
 
 export const listExistingStatusNotes = async (

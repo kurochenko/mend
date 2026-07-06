@@ -6,11 +6,18 @@ import { withProjectRepoLock } from '@/integrations/repo-locks'
 import { toErrorMessage } from '@/lib/errors'
 import { assertCommitSha, assertSafeGitRef, execGit } from '@/lib/exec'
 
-const buildAuthHeader = (token: string): string =>
-  `Authorization: Basic ${Buffer.from(`oauth2:${token}`).toString('base64')}`
+const authUsername = (project: ProjectConfig): string =>
+  project.platform === 'github' ? 'x-access-token' : 'oauth2'
 
-const execGitWithAuth = async (args: string[], cwd: string, token: string): Promise<string> =>
-  await execGit(args, cwd, { config: { 'http.extraHeader': buildAuthHeader(token) } })
+const buildAuthHeader = (project: ProjectConfig): string =>
+  `Authorization: Basic ${Buffer.from(`${authUsername(project)}:${project.token}`).toString('base64')}`
+
+const execGitWithAuth = async (
+  args: string[],
+  cwd: string,
+  project: ProjectConfig,
+): Promise<string> =>
+  await execGit(args, cwd, { config: { 'http.extraHeader': buildAuthHeader(project) } })
 
 const branchRef = (branch: string): string => `refs/heads/${branch}`
 
@@ -59,14 +66,10 @@ export const ensureClone = async (project: ProjectConfig): Promise<string> => {
     if (existsSync(barePath)) {
       console.log(`[repo] fetching origin for ${project.key}`)
       await execGit(['remote', 'set-url', 'origin', repoCloneUrl], barePath)
-      await execGitWithAuth(['fetch', 'origin'], barePath, project.token)
+      await execGitWithAuth(['fetch', 'origin'], barePath, project)
     } else {
       console.log(`[repo] cloning ${project.key} (bare) → ${barePath}`)
-      await execGitWithAuth(
-        ['clone', '--bare', repoCloneUrl, barePath],
-        process.cwd(),
-        project.token,
-      )
+      await execGitWithAuth(['clone', '--bare', repoCloneUrl, barePath], process.cwd(), project)
     }
 
     return barePath
@@ -88,7 +91,7 @@ const hasCommit = async (repoPath: string, commitSha: string): Promise<boolean> 
 const fetchCommitSha = async (project: ProjectConfig, commitSha: string): Promise<void> => {
   const safeCommitSha = assertCommitSha(commitSha)
   try {
-    await execGitWithAuth(['fetch', 'origin', safeCommitSha], project.clone_path, project.token)
+    await execGitWithAuth(['fetch', 'origin', safeCommitSha], project.clone_path, project)
   } catch (error) {
     throw new Error(
       `Unable to fetch requested commit SHA ${safeCommitSha} from origin: ${toErrorMessage(error)}`,
@@ -112,7 +115,7 @@ const fetchWorktreeRefs = async (
     await execGitWithAuth(
       ['fetch', 'origin', `+${sourceBranch}:${sourceBranch}`],
       project.clone_path,
-      project.token,
+      project,
     )
   } catch (branchError) {
     if (!commitSha) {
@@ -206,12 +209,12 @@ export const commitAndPushWorktree = async (params: {
   await execGitWithAuth(
     ['push', 'origin', `HEAD:${branchRef(safeSourceBranch)}`],
     params.worktreePath,
-    params.project.token,
+    params.project,
   )
   const remoteHeadSha = await execGitWithAuth(
     ['ls-remote', 'origin', branchRef(safeSourceBranch)],
     params.worktreePath,
-    params.project.token,
+    params.project,
   ).then((output) => output.split(/\s+/)[0] ?? '')
 
   return {

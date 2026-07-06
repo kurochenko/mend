@@ -1,4 +1,4 @@
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { createWithReconciliation } from '@/integrations/idempotent'
 import {
   createDiscussion,
@@ -128,7 +128,7 @@ const findPublishedSummaryForRun = (
 ): ProviderNote | undefined => matchSummaryNote(notes)
 
 const classifyAndCleanPreExistingDrafts = async (params: {
-  project: ProjectConfig
+  project: GitLabProjectConfig
   projectKey: string
   changeNumber: number
   reviewRunId: string
@@ -195,7 +195,7 @@ const buildDraftNotePosition = (params: {
 }
 
 const createDraftNoteWithReconciliation = async (params: {
-  project: ProjectConfig
+  project: GitLabProjectConfig
   changeNumber: number
   draft: PublishInlineDraft
   diffRefs: DiffRefs
@@ -216,7 +216,7 @@ const createDraftNoteWithReconciliation = async (params: {
 }
 
 const bulkPublishDraftsWithReconciliation = async (params: {
-  project: ProjectConfig
+  project: GitLabProjectConfig
   changeNumber: number
   reviewRunId: string
   classifyDraft: (body: string) => DraftClassification
@@ -257,7 +257,7 @@ const bulkPublishDraftsWithReconciliation = async (params: {
 }
 
 const createSummaryNoteWithReconciliation = async (params: {
-  project: ProjectConfig
+  project: GitLabProjectConfig
   changeNumber: number
   body: string
   matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
@@ -273,7 +273,7 @@ const createSummaryNoteWithReconciliation = async (params: {
 }
 
 const publishReviewBatch = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   params: GitLabPublishReviewBatchParams,
 ): Promise<PublishBatchResult> => {
   const draftRecovery = await classifyAndCleanPreExistingDrafts({
@@ -332,7 +332,7 @@ const publishReviewBatch = async (
   }
 }
 
-export const createGitLabReviewProvider = (project: ProjectConfig) => ({
+export const createGitLabReviewProvider = (project: GitLabProjectConfig) => ({
   kind: 'gitlab' as const,
   fetchCurrentUser: async () => await fetchCurrentUser(project),
   fetchChangeRequest: async (changeNumber: number) => await fetchMr(project, changeNumber),

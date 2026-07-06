@@ -19,6 +19,24 @@ const baseProject = {
   },
 }
 
+const githubProject = {
+  platform: 'github',
+  url: 'https://github.com',
+  token: 'token',
+  webhook_secret: 'secret',
+  repo: 'org/repo',
+  repo_url: 'git@github.com:org/repo.git',
+  default_branch: 'main',
+  trigger: { mode: 'ready' },
+  tools: {},
+  review: {
+    llm: {
+      model: 'gpt-5',
+      thinking_level: 'medium',
+    },
+  },
+}
+
 describe('parseProjectsFileConfig', () => {
   test('keeps fixer workspace optional for existing project configs', () => {
     const config = parseProjectsFileConfig({
@@ -225,5 +243,46 @@ describe('parseProjectsFileConfig', () => {
         },
       }),
     ).toThrow('workspace env name must be a valid shell variable name')
+  })
+
+  test('parses github project configs', () => {
+    const config = parseProjectsFileConfig({
+      projects: {
+        app: githubProject,
+      },
+    })
+
+    const project = config.projects.app
+    expect(project?.platform).toBe('github')
+    if (project?.platform !== 'github') {
+      throw new Error('expected github project')
+    }
+    expect(project.url).toBe('https://github.com')
+    expect(project.repo).toBe('org/repo')
+    expect(project.review.flags.bug_history).toBe(true)
+  })
+
+  test('requires github repo', () => {
+    const { repo: _repo, ...withoutRepo } = githubProject
+    expect(() =>
+      parseProjectsFileConfig({
+        projects: {
+          app: withoutRepo,
+        },
+      }),
+    ).toThrow()
+  })
+
+  test('rejects bad github repo format', () => {
+    expect(() =>
+      parseProjectsFileConfig({
+        projects: {
+          app: {
+            ...githubProject,
+            repo: 'org/repo/extra',
+          },
+        },
+      }),
+    ).toThrow('repo must match owner/name')
   })
 })

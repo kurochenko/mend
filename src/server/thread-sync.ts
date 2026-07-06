@@ -14,12 +14,14 @@ import {
   type ReviewThreadRecord,
 } from '@/db/review-threads'
 import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
+import type { ReviewProvider as PersistedReviewProvider } from '@/lib/review-threads'
 import {
   collectPersistableThreads,
   deriveThreadContext,
   getThreadStatus,
 } from '@/mastra/review/thread-context'
 import { parseProviderTimestamp } from '@/lib/timestamps'
+import { repoExternalIdForProject } from '@/server/webhook-events'
 
 export interface ThreadSyncDependencies {
   getReviewThreadByProviderThreadId: typeof getReviewThreadByProviderThreadId
@@ -68,7 +70,7 @@ export const upsertProviderThread = async (params: {
   const existing =
     params.existingThread ??
     (await dependencies.getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: params.project.platform,
       providerThreadId: params.thread.id,
     }))
 
@@ -79,9 +81,9 @@ export const upsertProviderThread = async (params: {
     : null
 
   return await dependencies.upsertReviewThread({
-    provider: 'gitlab',
+    provider: params.project.platform,
     projectKey: existing?.projectKey ?? params.projectKey,
-    repoExternalId: existing?.repoExternalId ?? `${params.project.project_id}`,
+    repoExternalId: existing?.repoExternalId ?? repoExternalIdForProject(params.project),
     reviewExternalId: existing?.reviewExternalId ?? params.mrIid,
     reviewRunId: reviewRunId ?? existing?.reviewRunId ?? params.latestReviewRunId ?? null,
     threadKind: context.threadKind,
@@ -107,7 +109,7 @@ export const persistOutboundReply = async (params: {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   return await dependencies.upsertReviewMessage({
     threadId: params.thread.id,
-    provider: 'gitlab',
+    provider: params.thread.provider as PersistedReviewProvider,
     reviewRunId: params.reviewRunId,
     authorType: 'agent',
     authorExternalId: `${params.reply.author.id}`,
@@ -124,6 +126,7 @@ export const persistOutboundReply = async (params: {
 }
 
 export const persistProviderReplyLocally = async (params: {
+  provider?: 'gitlab' | 'github'
   threadId: string
   reviewRunId: string | null
   reply: ProviderThreadMessage
@@ -132,7 +135,7 @@ export const persistProviderReplyLocally = async (params: {
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   const thread = await dependencies.getReviewThreadByProviderThreadId({
-    provider: 'gitlab',
+    provider: params.provider ?? 'gitlab',
     providerThreadId: params.threadId,
   })
 
@@ -152,13 +155,13 @@ export const persistProviderReplyLocally = async (params: {
   }
 
   await dependencies.updateReviewThreadStatusByProviderThreadId({
-    provider: 'gitlab',
+    provider: params.provider ?? 'gitlab',
     providerThreadId: params.threadId,
     status: 'resolved',
   })
 
   const finding = await dependencies.getReviewFindingByProviderThreadId({
-    provider: 'gitlab',
+    provider: params.provider ?? 'gitlab',
     providerThreadId: params.threadId,
   })
 
@@ -173,12 +176,13 @@ export const persistProviderReplyLocally = async (params: {
 }
 
 export const markProviderThreadResolved = async (params: {
+  provider?: 'gitlab' | 'github'
   providerThreadId: string
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   await dependencies.updateReviewThreadStatusByProviderThreadId({
-    provider: 'gitlab',
+    provider: params.provider ?? 'gitlab',
     providerThreadId: params.providerThreadId,
     status: 'resolved',
   })
@@ -220,9 +224,9 @@ export const persistPublishedThreads = async (params: {
 
   for (const entry of persistable) {
     const thread = await dependencies.upsertReviewThread({
-      provider: 'gitlab',
+      provider: params.project.platform,
       projectKey: params.projectKey,
-      repoExternalId: `${params.project.project_id}`,
+      repoExternalId: repoExternalIdForProject(params.project),
       reviewExternalId: params.mrIid,
       reviewRunId: params.reviewRunId,
       threadKind: entry.context.threadKind,
@@ -240,7 +244,7 @@ export const persistPublishedThreads = async (params: {
 
     await dependencies.upsertReviewMessage({
       threadId: thread.id,
-      provider: 'gitlab',
+      provider: params.project.platform,
       reviewRunId: params.reviewRunId,
       authorType: 'agent',
       authorExternalId: `${entry.firstNote.author.id}`,
@@ -281,6 +285,7 @@ export const persistPublishedThreads = async (params: {
 }
 
 export const persistPostedReviewFindings = async (params: {
+  project: ProjectConfig
   projectKey: string
   mrIid: number
   reviewRunId: string
@@ -299,7 +304,7 @@ export const persistPostedReviewFindings = async (params: {
     }
 
     const thread = await dependencies.getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: params.project.platform,
       providerThreadId: finding.ref.providerThreadId,
     })
 
@@ -313,7 +318,7 @@ export const persistPostedReviewFindings = async (params: {
         mrIid: params.mrIid,
         reviewRunId: params.reviewRunId,
         threadId: thread.id,
-        provider: 'gitlab',
+        provider: params.project.platform,
         providerThreadId: finding.ref.providerThreadId,
         providerNoteId: finding.ref.providerMessageId,
         metadata: finding.metadata,

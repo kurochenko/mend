@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import {
   classifyWebhook,
   extractMrLabels,
@@ -7,7 +7,7 @@ import {
   type WebhookPayload,
 } from '@/server/gitlab-webhook'
 
-const makeProject = (overrides: Partial<ProjectConfig> = {}): ProjectConfig => ({
+const makeProject = (overrides: Partial<GitLabProjectConfig> = {}): GitLabProjectConfig => ({
   key: 'test-project',
   platform: 'gitlab',
   url: 'https://gitlab.example.com',
