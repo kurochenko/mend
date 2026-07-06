@@ -118,6 +118,91 @@ const makeThread = (params: {
   ],
 })
 
+const makePostResult = (overrides: Record<string, unknown> = {}) => ({
+  version: 'v2',
+  projectKey: 'demo-frontend',
+  mrIid: 1570,
+  reviewRunId: 'run-1570',
+  url: 'https://example.com/mr/1570',
+  commitSha: 'abc123',
+  reviewMode: 'initial',
+  previousReviewedSha: null,
+  previousRunId: null,
+  reviewIntent: 'feature',
+  reviewIntentConfidence: 0.9,
+  reviewIntentRationale: ['feature term in title'],
+  reviewTemplateId: 'feature',
+  reviewTemplateSource: 'classifier',
+  assessment: 'needs_discussion',
+  summary: 'summary',
+  findings: [],
+  inlineComments: [],
+  resolutionVerdicts: [],
+  meta: {
+    templateId: 'feature',
+    intent: 'feature',
+    confidence: 0.9,
+    selectionSource: 'classifier',
+  },
+  featureFlags: {
+    promptTemplatesV2: true,
+    schemaV2: true,
+    structuredFindingsPost: true,
+    structuralSignals: true,
+    bugHistory: true,
+    dryRun: false,
+  },
+  reviewDiagnostics: {
+    reviewMode: 'initial',
+    previousReviewedSha: null,
+    diffBaseRef: 'main',
+    changedFileCount: 1,
+    diffExcerptChars: 100,
+    diffTruncated: false,
+    intentClassifierModel: 'test-model',
+    intentClassifierDurationMs: 1,
+    intentClassifierFailure: null,
+    intentSecondaryIntents: [],
+    agent: {
+      harness: 'pi',
+      model: 'test-model',
+      durationMs: 2,
+    },
+    inspection: {
+      files: ['src/in-scope.ts'],
+      changedFiles: ['src/in-scope.ts'],
+      changedFileCount: 1,
+      changedFileCoverage: 1,
+    },
+    contextPackageDiagnostics: [],
+    templateWarnings: [],
+  },
+  comparisonResult: null,
+  postedInlineComments: [],
+  postedFindings: [],
+  threadedFindings: [],
+  threadedInlineComments: [],
+  postDiagnostics: {
+    findingsCount: 0,
+    outOfScopeFindingCount: 0,
+    inlineCommentCount: 0,
+    outOfScopeInlineCount: 0,
+    postedInlineCount: 0,
+    preExistingDraftCount: 0,
+    recoveredDraftCount: 0,
+    draftRecoveryAction: 'none',
+    skippedInlineReasons: {},
+    resolvedThreadCount: 0,
+    partiallyFixedThreadCount: 0,
+    unmatchedVerdictCount: 0,
+  },
+  posted: 0,
+  skipped: 0,
+  reviewNumber: 1,
+  summaryNoteId: 1,
+  ...overrides,
+})
+
 describe('buildPreviousReviewContext', () => {
   beforeEach(() => {
     mockGetReviewRun.mockReset()
@@ -317,7 +402,7 @@ describe('buildPreviousReviewContext', () => {
     )
 
     const context = await buildPreviousReviewContext({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       mrIid: 1570,
       previousRunId: 'run-1570',
     })
@@ -392,7 +477,7 @@ describe('buildPreviousReviewContext', () => {
     )
 
     const threads = await loadPublishedReviewThreadsForMr({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       projectKey: 'demo',
       mrIid: 12,
     })
@@ -431,7 +516,7 @@ describe('buildPreviousReviewContext', () => {
     )
 
     await loadPublishedReviewThreadsForMr({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       projectKey: 'demo',
       mrIid: 12,
     })
@@ -497,7 +582,7 @@ describe('buildPreviousReviewContext', () => {
     )
 
     const threads = await loadPublishedReviewThreadsForMr({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       projectKey: 'demo',
       mrIid: 12,
     })
@@ -536,7 +621,7 @@ describe('buildPreviousReviewContext', () => {
     )
 
     const threads = await loadPublishedReviewThreadsForMr({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       projectKey: 'demo',
       mrIid: 12,
     })
@@ -577,11 +662,125 @@ describe('buildPreviousReviewContext', () => {
     mockCreateReviewMemoryEntry.mockImplementation(() => Promise.reject(new Error('db down')))
 
     const threads = await loadPublishedReviewThreadsForMr({
-      project: { project_id: 1 } as never,
+      project: { platform: 'gitlab', project_id: 1 } as never,
       projectKey: 'demo',
       mrIid: 12,
     })
 
     expect(threads).toEqual([{ findingFingerprint: 'finding-1', status: 'resolved' }])
+  })
+
+  test('loads and refreshes stored github thread status for github projects', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'abc123',
+        result: makePostResult({
+          threadedFindings: [
+            {
+              id: 'github-finding',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'recommended',
+              scope: 'cross_file',
+              title: 'GitHub finding',
+              body: 'This was posted as a GitHub thread.',
+              evidence: [
+                {
+                  type: 'file_line',
+                  file: 'src/github.ts',
+                  line: 21,
+                  note: 'GitHub finding evidence.',
+                },
+              ],
+              files: ['src/github.ts'],
+              providerThreadId: 'github-thread',
+              providerMessageId: 'github-note',
+            },
+            {
+              id: 'stored-only-github-finding',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'recommended',
+              scope: 'cross_file',
+              title: 'Stored GitHub finding',
+              body: 'This one only has stored status.',
+              evidence: [
+                {
+                  type: 'file_line',
+                  file: 'src/stored.ts',
+                  line: 22,
+                  note: 'Stored GitHub finding evidence.',
+                },
+              ],
+              files: ['src/stored.ts'],
+              providerThreadId: 'stored-github-thread',
+              providerMessageId: 'stored-github-note',
+            },
+          ],
+        }),
+      }),
+    )
+    mockListReviewThreadsForRun.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'gitlab',
+          providerThreadId: 'github-thread',
+          threadKind: 'summary_finding',
+          status: 'resolved',
+        },
+        {
+          provider: 'github',
+          providerThreadId: 'stored-github-thread',
+          threadKind: 'summary_finding',
+          status: 'resolved',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'github-thread',
+          isThread: true,
+          messages: [
+            {
+              id: 'github-note',
+              body: 'Thread body',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-1570',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        id: 'github-finding',
+        discussionId: 'github-thread',
+        resolved: false,
+      }),
+    )
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        id: 'stored-only-github-finding',
+        discussionId: 'stored-github-thread',
+        resolved: true,
+      }),
+    )
+    expect(mockUpdateReviewThreadStatusByProviderThreadId).toHaveBeenCalledWith({
+      provider: 'github',
+      providerThreadId: 'github-thread',
+      status: 'open',
+    })
   })
 })

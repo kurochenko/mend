@@ -29,6 +29,7 @@ const reviewSchema = z
   .object({
     id: z.number(),
     state: z.string(),
+    body: z.string().nullable().optional(),
     user: z.object({ id: z.number(), login: z.string() }).nullable().optional(),
   })
   .passthrough()
@@ -84,6 +85,9 @@ const classifyPendingReviews = async (params: {
   const classified: DraftClassification[] = []
   for (const review of pendingReviews) {
     const comments = await listReviewComments(params.project, params.changeNumber, review.id)
+    if (typeof review.body === 'string' && review.body.trim().length > 0) {
+      classified.push(params.classifyDraft(review.body))
+    }
     classified.push(...comments.map((comment) => params.classifyDraft(comment.body)))
   }
 

@@ -58,6 +58,7 @@ const isPublishedFindingThreadKind = (threadKind: string): boolean =>
 
 const syncResolvedThreadMemory = async (params: {
   projectKey: string
+  platform: ProjectConfig['platform']
   mrIid: number
   storedThread: ReviewThreadRecord
   entry: PersistableThread
@@ -78,12 +79,12 @@ const syncResolvedThreadMemory = async (params: {
 
   const sourceMessage =
     (await getReviewMessageByProviderMessageId({
-      provider: 'gitlab',
+      provider: params.platform,
       providerMessageId: humanReply.id,
     })) ??
     (await upsertReviewMessage({
       threadId: params.storedThread.id,
-      provider: 'gitlab',
+      provider: params.platform,
       reviewRunId: params.storedThread.reviewRunId,
       authorType: 'human',
       authorExternalId: `${humanReply.author.id}`,
@@ -171,7 +172,7 @@ export const loadPublishedReviewThreadsForMr = async (params: {
       })
 
       await updateReviewThreadStatusByProviderThreadId({
-        provider: 'gitlab',
+        provider: params.project.platform,
         providerThreadId: entry.thread.id,
         status,
       })
@@ -180,6 +181,7 @@ export const loadPublishedReviewThreadsForMr = async (params: {
         try {
           await syncResolvedThreadMemory({
             projectKey: params.projectKey,
+            platform: params.project.platform,
             mrIid: params.mrIid,
             storedThread,
             entry,
@@ -204,14 +206,17 @@ export const loadPublishedReviewThreadsForMr = async (params: {
 const buildInlineCommentKey = (comment: { file: string; line: number; body: string }): string =>
   `${comment.file}:${comment.line}:${comment.body}`
 
-const loadStoredThreadStatus = async (previousRunId: string): Promise<Map<string, boolean>> => {
-  const threads = await listReviewThreadsForRun(previousRunId)
+const loadStoredThreadStatus = async (params: {
+  previousRunId: string
+  platform: ProjectConfig['platform']
+}): Promise<Map<string, boolean>> => {
+  const threads = await listReviewThreadsForRun(params.previousRunId)
   return new Map(
     threads
       .filter(
         (thread) =>
           (thread.threadKind === 'inline' || thread.threadKind === 'summary_finding') &&
-          thread.provider === 'gitlab',
+          thread.provider === params.platform,
       )
       .map((thread) => [thread.providerThreadId, thread.status === 'resolved'] as const),
   )
@@ -267,7 +272,7 @@ const refreshThreadStatus = async (params: {
     refreshedThreadStatus.set(thread.id, resolved)
 
     await updateReviewThreadStatusByProviderThreadId({
-      provider: 'gitlab',
+      provider: params.project.platform,
       providerThreadId: thread.id,
       status: resolved ? 'resolved' : 'open',
     })
@@ -305,7 +310,10 @@ export const buildPreviousReviewContext = async (params: {
     .map((comment) => comment.providerThreadId)
     .filter((discussionId): discussionId is string => discussionId !== null)
 
-  let threadStatus = await loadStoredThreadStatus(params.previousRunId)
+  let threadStatus = await loadStoredThreadStatus({
+    previousRunId: params.previousRunId,
+    platform: params.project.platform,
+  })
 
   if (discussionIds.length > 0) {
     try {

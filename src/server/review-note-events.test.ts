@@ -287,6 +287,7 @@ const mockReplyToThread = mock<(...args: unknown[]) => Promise<ProviderThreadMes
   Promise.resolve(makeReplyNote()),
 )
 const mockResolveThread = mock(() => Promise.resolve())
+const mockAddNoteReaction = mock(() => Promise.resolve())
 const mockAddThreadMessageReaction = mock(() => Promise.resolve())
 const mockCreateReviewProvider = mock<() => ReviewProvider>(() => ({
   kind: 'gitlab',
@@ -305,7 +306,7 @@ const mockCreateReviewProvider = mock<() => ReviewProvider>(() => ({
   createThread: mockCreateThread,
   replyToThread: mockReplyToThread,
   resolveThread: mockResolveThread,
-  addNoteReaction: mock(async () => {}),
+  addNoteReaction: mockAddNoteReaction,
   addThreadMessageReaction: mockAddThreadMessageReaction,
   publishReviewBatch: mock(async () => ({
     preExistingDraftCount: 0,
@@ -374,6 +375,9 @@ mock.module('@/db/review-findings', () => ({
   getReviewFindingByThreadId: mockGetReviewFindingByThreadId,
   updateReviewFindingState: mockUpdateReviewFindingState,
   listReviewFindingsForMr: mock(() => Promise.resolve([])),
+  countReviewFindingsByStateForMr: mock(() =>
+    Promise.resolve({ pending: 0, accepted: 0, rejected: 0, deferred: 0 }),
+  ),
   getReviewFindingByProviderThreadId: mock(() => Promise.resolve(null)),
   upsertReviewFinding: mock(() => Promise.resolve(makeFinding())),
 }))
@@ -685,6 +689,7 @@ describe('processGitlabMergeRequestNote', () => {
     mockListThreads.mockReset()
     mockReplyToThread.mockReset()
     mockResolveThread.mockReset()
+    mockAddNoteReaction.mockReset()
     mockAddThreadMessageReaction.mockReset()
     mockGetReviewThreadByProviderThreadId.mockReset()
     mockListReviewMessagesForThread.mockReset()
@@ -713,6 +718,7 @@ describe('processGitlabMergeRequestNote', () => {
     mockListThreads.mockImplementation(() => Promise.resolve([]))
     mockReplyToThread.mockImplementation(() => Promise.resolve(makeReplyNote()))
     mockResolveThread.mockImplementation(() => Promise.resolve())
+    mockAddNoteReaction.mockImplementation(() => Promise.resolve())
     mockAddThreadMessageReaction.mockImplementation(() => Promise.resolve())
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(null))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([]))
@@ -813,6 +819,33 @@ describe('processGitlabMergeRequestNote', () => {
 
     expect(mockGetThread).not.toHaveBeenCalled()
     expect(mockListThreads).toHaveBeenCalledTimes(1)
+  })
+
+  test('adds reactions through general note endpoint when discussion_id is absent', async () => {
+    const discussion = makeDiscussion()
+    mockListThreads.mockImplementation(() => Promise.resolve([discussion]))
+
+    const payload = makeNotePayload({ note: 'This is a false positive.' })
+    delete (payload.object_attributes as Record<string, unknown>).discussion_id
+
+    await processGitlabMergeRequestNote({ project: makeProject(), payload })
+
+    expect(mockAddNoteReaction).toHaveBeenCalledWith(42, 999, 'eyes')
+    expect(mockAddNoteReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
+    expect(mockAddThreadMessageReaction).not.toHaveBeenCalled()
+  })
+
+  test('adds reactions through thread message endpoint when discussion_id is present', async () => {
+    const discussion = makeDiscussion()
+    setupMendOwnedThread(discussion)
+
+    const payload = makeNotePayload({ note: 'This is a false positive.' })
+
+    await processGitlabMergeRequestNote({ project: makeProject(), payload })
+
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'eyes')
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
+    expect(mockAddNoteReaction).not.toHaveBeenCalled()
   })
 
   test('accept command updates the persisted finding decision only', async () => {

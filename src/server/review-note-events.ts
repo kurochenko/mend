@@ -144,9 +144,14 @@ const addReaction = async (params: {
   mrIid: number
   noteId: number
   name: string
+  hasThreadContext: boolean
 }): Promise<void> => {
   try {
-    await params.provider.addThreadMessageReaction(params.mrIid, params.noteId, params.name)
+    if (params.hasThreadContext) {
+      await params.provider.addThreadMessageReaction(params.mrIid, params.noteId, params.name)
+    } else {
+      await params.provider.addNoteReaction(params.mrIid, params.noteId, params.name)
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes('has already been taken')) {
@@ -556,6 +561,7 @@ export const processReviewNoteEvent = async (params: {
       mrIid,
       noteId,
       name: 'eyes',
+      hasThreadContext: webhookDiscussionId !== undefined,
     }).catch((error) => {
       console.warn(`[notes] failed to add eyes reaction to note ${noteId}: ${error}`)
     })
@@ -580,6 +586,7 @@ export const processReviewNoteEvent = async (params: {
           mrIid,
           noteId,
           name: 'white_check_mark',
+          hasThreadContext: webhookDiscussionId !== undefined,
         }).catch((error) => {
           console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
         })
@@ -774,6 +781,7 @@ export const processReviewNoteEvent = async (params: {
         mrIid,
         noteId,
         name: 'white_check_mark',
+        hasThreadContext: webhookDiscussionId !== undefined,
       }).catch((error) => {
         console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
       })
