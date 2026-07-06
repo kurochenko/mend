@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ProjectConfig } from '@/config'
 import type { ReviewFindingRecord } from '@/db/review-findings'
-import type { DiscussionNote } from '@/integrations/gitlab/discussions'
+import type { ProviderThreadMessage } from '@/integrations/provider/types'
 import {
   applyFixerFindingStates,
   type FixerFindingStateDependencies,
@@ -80,11 +80,12 @@ const makeFinding = (id: string, state: ReviewFindingRecord['state']): ReviewFin
   updatedAt: now,
 })
 
-const makeReply = (body: string): DiscussionNote => ({
-  id: 99,
+const makeReply = (body: string): ProviderThreadMessage => ({
+  id: '99',
   body,
   author: { id: 7, username: 'mend-bot', raw: { id: 7 } },
   resolvable: true,
+  position: null,
   raw: { id: 99 },
 })
 

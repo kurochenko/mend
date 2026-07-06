@@ -3,7 +3,8 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { closeDb, initDb } from '@/db/client'
 import { getReviewRun } from '@/db/review-runs'
-import { fetchMr, type MrDetails } from '@/integrations/gitlab/mr'
+import { createReviewProvider } from '@/integrations/provider/client'
+import type { ChangeRequestDetails } from '@/integrations/provider/types'
 import { assertCommitSha } from '@/lib/exec'
 import { mrReviewInputSchema, type MrReviewInput } from '@/lib/review-run-input'
 import type { ReviewRunSource } from '@/db/review-runs'
@@ -164,7 +165,7 @@ const parseMrIid = (value: string): number => {
 export const buildReplayInputFromMr = (params: {
   projectKey: string
   mrIid: number
-  mr: MrDetails
+  mr: ChangeRequestDetails
   commitSha?: string
 }): MrReviewInput => {
   const requestedCommitSha =
@@ -198,7 +199,8 @@ const executeReplayFromMr = async (
   }
 
   const mastra = createMastra(config)
-  const mr = await fetchMr(project, mrIid)
+  const provider = createReviewProvider(project)
+  const mr = await provider.fetchChangeRequest(mrIid)
   const input = buildReplayInputFromMr({
     projectKey,
     mrIid,

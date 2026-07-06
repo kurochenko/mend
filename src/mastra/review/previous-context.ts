@@ -13,14 +13,15 @@ import {
   type ReviewThreadRecord,
 } from '@/db/review-threads'
 import { getReviewRun } from '@/db/review-runs'
-import { listMrDiscussions, type Discussion } from '@/integrations/gitlab/discussions'
+import { createReviewProvider } from '@/integrations/provider/client'
+import type { ProviderThread } from '@/integrations/provider/types'
 import type { ExistingPublishedThread } from '@/mastra/review/publish-plan'
 import { postStepOutputSchema } from '@/mastra/review/run-result'
 import {
-  collectPersistableGitLabDiscussions,
+  collectPersistableThreads,
   findLatestHumanReply,
-  getDiscussionStatus,
-  type PersistableGitLabDiscussion,
+  getThreadStatus,
+  type PersistableThread,
 } from '@/mastra/review/thread-context'
 import { parseProviderTimestamp } from '@/lib/timestamps'
 
@@ -59,7 +60,7 @@ const syncResolvedThreadMemory = async (params: {
   projectKey: string
   mrIid: number
   storedThread: ReviewThreadRecord
-  entry: PersistableGitLabDiscussion
+  entry: PersistableThread
   status: ExistingPublishedThread['status']
 }): Promise<void> => {
   if (params.status === 'open') {
@@ -70,7 +71,7 @@ const syncResolvedThreadMemory = async (params: {
     return
   }
 
-  const humanReply = findLatestHumanReply(params.entry.discussion)
+  const humanReply = findLatestHumanReply(params.entry.thread)
   if (!humanReply) {
     return
   }
@@ -78,7 +79,7 @@ const syncResolvedThreadMemory = async (params: {
   const sourceMessage =
     (await getReviewMessageByProviderMessageId({
       provider: 'gitlab',
-      providerMessageId: `${humanReply.id}`,
+      providerMessageId: humanReply.id,
     })) ??
     (await upsertReviewMessage({
       threadId: params.storedThread.id,
@@ -89,8 +90,8 @@ const syncResolvedThreadMemory = async (params: {
       authorName: humanReply.author.username,
       direction: 'inbound',
       body: humanReply.body,
-      providerMessageId: `${humanReply.id}`,
-      providerParentMessageId: `${params.entry.firstNote.id}`,
+      providerMessageId: humanReply.id,
+      providerParentMessageId: params.entry.firstNote.id,
       providerUrl: humanReply.url ?? null,
       rawProviderData: humanReply.raw,
       providerCreatedAt: parseProviderTimestamp(humanReply.createdAt),
@@ -148,9 +149,10 @@ export const loadPublishedReviewThreadsForMr = async (params: {
   }
 
   try {
-    const discussions = await listMrDiscussions(params.project, params.mrIid)
-    for (const entry of collectPersistableGitLabDiscussions(discussions)) {
-      const storedThread = storedThreadsByProviderThreadId.get(entry.discussion.id)
+    const provider = createReviewProvider(params.project)
+    const threads = await provider.listThreads(params.mrIid)
+    for (const entry of collectPersistableThreads(threads)) {
+      const storedThread = storedThreadsByProviderThreadId.get(entry.thread.id)
       if (storedThread?.status === 'archived') {
         continue
       }
@@ -162,7 +164,7 @@ export const loadPublishedReviewThreadsForMr = async (params: {
         continue
       }
 
-      const status = getDiscussionStatus(entry.discussion)
+      const status = getThreadStatus(entry.thread)
       byFingerprint.set(entry.context.findingFingerprint, {
         findingFingerprint: entry.context.findingFingerprint,
         status,
@@ -170,7 +172,7 @@ export const loadPublishedReviewThreadsForMr = async (params: {
 
       await updateReviewThreadStatusByProviderThreadId({
         provider: 'gitlab',
-        providerThreadId: entry.discussion.id,
+        providerThreadId: entry.thread.id,
         status,
       })
 
@@ -185,7 +187,7 @@ export const loadPublishedReviewThreadsForMr = async (params: {
           })
         } catch (error) {
           console.warn(
-            `[previous-context] failed to sync resolved-thread memory for ${params.projectKey} MR !${params.mrIid} discussion ${entry.discussion.id}: ${error}`,
+            `[previous-context] failed to sync resolved-thread memory for ${params.projectKey} MR !${params.mrIid} discussion ${entry.thread.id}: ${error}`,
           )
         }
       }
@@ -232,8 +234,8 @@ const formatFindingStatus = (params: {
   }
 }
 
-const isDiscussionResolved = (discussion: Discussion): boolean => {
-  const firstNote = discussion.notes[0]
+const isThreadResolved = (thread: ProviderThread): boolean => {
+  const firstNote = thread.messages[0]
   if (!firstNote?.resolvable) {
     return false
   }
@@ -251,21 +253,22 @@ const refreshThreadStatus = async (params: {
     return params.storedThreadStatus
   }
 
-  const discussions = await listMrDiscussions(params.project, params.mrIid)
+  const provider = createReviewProvider(params.project)
+  const threads = await provider.listThreads(params.mrIid)
   const discussionIds = new Set(params.discussionIds)
   const refreshedThreadStatus = new Map(params.storedThreadStatus)
 
-  for (const discussion of discussions) {
-    if (!discussionIds.has(discussion.id)) {
+  for (const thread of threads) {
+    if (!discussionIds.has(thread.id)) {
       continue
     }
 
-    const resolved = isDiscussionResolved(discussion)
-    refreshedThreadStatus.set(discussion.id, resolved)
+    const resolved = isThreadResolved(thread)
+    refreshedThreadStatus.set(thread.id, resolved)
 
     await updateReviewThreadStatusByProviderThreadId({
       provider: 'gitlab',
-      providerThreadId: discussion.id,
+      providerThreadId: thread.id,
       status: resolved ? 'resolved' : 'open',
     })
   }

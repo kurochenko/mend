@@ -43,9 +43,9 @@ describe('resolveDiffBaseRef', () => {
         previousReviewedSha: previousSha,
         targetBranch: defaultBranch,
         diffRefs: {
-          base_sha: initialSha,
-          start_sha: initialSha,
-          head_sha: headSha,
+          baseSha: initialSha,
+          startSha: initialSha,
+          headSha,
         },
       })
 
@@ -75,9 +75,9 @@ describe('resolveDiffBaseRef', () => {
         previousReviewedSha: previousSha,
         targetBranch: defaultBranch,
         diffRefs: {
-          base_sha: initialSha,
-          start_sha: initialSha,
-          head_sha: headSha,
+          baseSha: initialSha,
+          startSha: initialSha,
+          headSha,
         },
       })
 

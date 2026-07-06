@@ -10,7 +10,7 @@ import type {
   ReviewAgentResult,
   ReviewAgentThinkingLevel,
 } from '@/agents/review-harness'
-import { fetchMrDiffRefs } from '@/integrations/gitlab/mr'
+import { createReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
 import { buildReviewContextPackage } from '@/mastra/review/context-package'
 import { resolveDiffBaseRef } from '@/mastra/review/diff-base'
@@ -60,7 +60,8 @@ export const resolveReviewContext = async (
     'mrIid' | 'worktreePath' | 'reviewMode' | 'previousReviewedSha' | 'targetBranch'
   >,
 ) => {
-  const { diffRefs } = await fetchMrDiffRefs(project, input.mrIid)
+  const provider = createReviewProvider(project)
+  const diffRefs = await provider.fetchDiffRefs(input.mrIid)
   const diffBaseResolution = await resolveDiffBaseRef({
     worktreePath: input.worktreePath,
     reviewMode: input.reviewMode,

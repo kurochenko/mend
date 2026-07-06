@@ -5,8 +5,8 @@ import {
   type ReviewFindingRecord,
 } from '@/db/review-findings'
 import { upsertReviewMessage } from '@/db/review-threads'
-import { replyToDiscussion } from '@/integrations/gitlab/discussions'
-import type { DiscussionNote } from '@/integrations/gitlab/discussions'
+import { createReviewProvider } from '@/integrations/provider/client'
+import type { ProviderThreadMessage } from '@/integrations/provider/types'
 import { parseProviderTimestamp } from '@/lib/timestamps'
 import type { FixerOutput } from '@/mastra/fix/schema'
 
@@ -32,15 +32,19 @@ export interface FixerFindingStateDependencies {
     mrIid: number
     providerThreadId: string
     body: string
-  }): Promise<DiscussionNote>
-  storeReply(params: { finding: ReviewFindingRecord; reply: DiscussionNote }): Promise<void>
+  }): Promise<ProviderThreadMessage>
+  storeReply(params: { finding: ReviewFindingRecord; reply: ProviderThreadMessage }): Promise<void>
 }
 
 const defaultDependencies: FixerFindingStateDependencies = {
   listFindings: listReviewFindingsForMr,
   updateFinding: updateReviewFindingState,
   reply: async (params) =>
-    await replyToDiscussion(params.project, params.mrIid, params.providerThreadId, params.body),
+    await createReviewProvider(params.project).replyToThread(
+      params.mrIid,
+      params.providerThreadId,
+      params.body,
+    ),
   storeReply: async (params) => {
     await upsertReviewMessage({
       threadId: params.finding.threadId,
@@ -51,7 +55,7 @@ const defaultDependencies: FixerFindingStateDependencies = {
       authorName: params.reply.author.username,
       direction: 'outbound',
       body: params.reply.body,
-      providerMessageId: `${params.reply.id}`,
+      providerMessageId: params.reply.id,
       providerParentMessageId: null,
       providerUrl: params.reply.url ?? null,
       rawProviderData: params.reply.raw,

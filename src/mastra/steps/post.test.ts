@@ -77,10 +77,11 @@ describe('buildResolvedFindingStateUpdate', () => {
   it('maps a verified fixed reply into a resolved finding state update', () => {
     expect(
       buildResolvedFindingStateUpdate({
-        id: 9,
+        id: '9',
         body: 'Verified as fixed in `abc123`: Guard was added',
         author: { id: 7, username: 'mend-bot', raw: { id: 7 } },
         resolvable: true,
+        position: null,
         raw: { id: 9 },
       }),
     ).toEqual({

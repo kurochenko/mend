@@ -7,7 +7,8 @@ import {
   appendSummaryMarkers,
 } from '@/mastra/review/markers'
 import type { ProjectConfig } from '@/config'
-import type { Discussion, DiscussionNote } from '@/integrations/gitlab/discussions'
+import type { ReviewProvider } from '@/integrations/provider/client'
+import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
 import type { ReviewMessageRecord, ReviewThreadRecord } from '@/db/review-threads'
 import type { ReviewMemoryEntryRecord, ReviewMemoryEventRecord } from '@/db/review-memory'
 import type { ReviewFindingRecord } from '@/db/review-findings'
@@ -122,21 +123,22 @@ describe('deriveThreadContext', () => {
   test('extracts inline context from GitLab diff note position', () => {
     const context = deriveThreadContext({
       id: 'discussion-1',
-      individual_note: false,
-      notes: [
+      isThread: true,
+      messages: [
         {
-          id: 1,
+          id: '1',
           body: 'hello',
           author: { id: 1, username: 'dev', raw: {} },
-          type: 'DiffNote',
           resolvable: true,
           resolved: false,
           createdAt: '2026-03-08T00:00:00.000Z',
           updatedAt: '2026-03-08T00:00:00.000Z',
           url: 'https://gitlab.example.com/note/1',
           position: {
-            new_path: 'src/app.ts',
-            new_line: 42,
+            path: 'src/app.ts',
+            oldPath: null,
+            line: 42,
+            oldLine: null,
           },
           raw: {},
         },
@@ -154,18 +156,18 @@ describe('deriveThreadContext', () => {
     const markedBody = appendInlineMarkers('Guard check is missing.', 'run-123', 'src/utils.ts', 10)
     const context = deriveThreadContext({
       id: 'discussion-2',
-      individual_note: false,
-      notes: [
+      isThread: true,
+      messages: [
         {
-          id: 2,
+          id: '2',
           body: markedBody,
           author: { id: 100, username: 'mend-bot', raw: {} },
-          type: 'DiffNote',
           resolvable: true,
           resolved: false,
           createdAt: '2026-03-08T00:00:00.000Z',
           updatedAt: '2026-03-08T00:00:00.000Z',
           url: 'https://gitlab.example.com/note/2',
+          position: null,
           raw: {},
         },
       ],
@@ -183,18 +185,18 @@ describe('deriveThreadContext', () => {
     const markedBody = appendSummaryMarkers('Review summary text.', 'run-456')
     const context = deriveThreadContext({
       id: 'discussion-3',
-      individual_note: false,
-      notes: [
+      isThread: true,
+      messages: [
         {
-          id: 3,
+          id: '3',
           body: markedBody,
           author: { id: 100, username: 'mend-bot', raw: {} },
-          type: null,
           resolvable: false,
           resolved: false,
           createdAt: '2026-03-08T00:00:00.000Z',
           updatedAt: '2026-03-08T00:00:00.000Z',
           url: 'https://gitlab.example.com/note/3',
+          position: null,
           raw: {},
         },
       ],
@@ -217,18 +219,18 @@ describe('deriveThreadContext', () => {
     })
     const context = deriveThreadContext({
       id: 'discussion-5',
-      individual_note: false,
-      notes: [
+      isThread: true,
+      messages: [
         {
-          id: 5,
+          id: '5',
           body: markedBody,
           author: { id: 100, username: 'mend-bot', raw: {} },
-          type: null,
           resolvable: true,
           resolved: false,
           createdAt: '2026-03-08T00:00:00.000Z',
           updatedAt: '2026-03-08T00:00:00.000Z',
           url: 'https://gitlab.example.com/note/5',
+          position: null,
           raw: {},
         },
       ],
@@ -245,18 +247,18 @@ describe('deriveThreadContext', () => {
   test('returns conversation context for notes without markers or position', () => {
     const context = deriveThreadContext({
       id: 'discussion-4',
-      individual_note: false,
-      notes: [
+      isThread: true,
+      messages: [
         {
-          id: 4,
+          id: '4',
           body: 'A general comment with no position data.',
           author: { id: 1, username: 'dev', raw: {} },
-          type: null,
           resolvable: false,
           resolved: false,
           createdAt: '2026-03-08T00:00:00.000Z',
           updatedAt: '2026-03-08T00:00:00.000Z',
           url: 'https://gitlab.example.com/note/4',
+          position: null,
           raw: {},
         },
       ],
@@ -272,66 +274,56 @@ describe('deriveThreadContext', () => {
 })
 
 const mockFetchCurrentUser = mock(() => Promise.resolve({ id: 100, username: 'mend-bot' }))
-const mockListMrNotes = mock(() => Promise.resolve([]))
-const mockCreateDraftNote = mock(() => Promise.resolve({ id: 1 }))
-const mockBulkPublishDrafts = mock(() => Promise.resolve())
-const mockListMrDraftNotes = mock(() => Promise.resolve([]))
-const mockDeleteDraftNote = mock(() => Promise.resolve())
-const mockPublishDraftNote = mock(() => Promise.resolve())
-const mockCreateMrNote = mock(() => Promise.resolve({ id: 1, body: '', author: null }))
-const mockUpdateMrNote = mock(() => Promise.resolve({ id: 1, body: '', author: null }))
-const mockDeleteMrNote = mock(() => Promise.resolve())
-const mockGetMrDiscussion = mock<(...args: unknown[]) => Promise<Discussion>>(() =>
+const mockGetThread = mock<(...args: unknown[]) => Promise<ProviderThread>>(() =>
   Promise.resolve(makeDiscussion()),
 )
-const mockListMrDiscussions = mock<(...args: unknown[]) => Promise<Discussion[]>>(() =>
+const mockListThreads = mock<(...args: unknown[]) => Promise<ProviderThread[]>>(() =>
   Promise.resolve([]),
 )
-const mockCreateDiscussion = mock<(...args: unknown[]) => Promise<Discussion>>(() =>
+const mockCreateThread = mock<(...args: unknown[]) => Promise<ProviderThread>>(() =>
   Promise.resolve(makeDiscussion()),
 )
-const mockReplyToDiscussion = mock<(...args: unknown[]) => Promise<DiscussionNote>>(() =>
+const mockReplyToThread = mock<(...args: unknown[]) => Promise<ProviderThreadMessage>>(() =>
   Promise.resolve(makeReplyNote()),
 )
-const mockResolveDiscussion = mock(() => Promise.resolve())
-const mockAddDiscussionNoteReaction = mock(() => Promise.resolve())
-
-mock.module('@/integrations/gitlab/notes', () => ({
-  createDraftNote: mockCreateDraftNote,
-  bulkPublishDrafts: mockBulkPublishDrafts,
-  publishDraftNote: mockPublishDraftNote,
-  listMrDraftNotes: mockListMrDraftNotes,
-  deleteDraftNote: mockDeleteDraftNote,
+const mockResolveThread = mock(() => Promise.resolve())
+const mockAddThreadMessageReaction = mock(() => Promise.resolve())
+const mockCreateReviewProvider = mock<() => ReviewProvider>(() => ({
+  kind: 'gitlab',
   fetchCurrentUser: mockFetchCurrentUser,
-  listMrNotes: mockListMrNotes,
-  createMrNote: mockCreateMrNote,
-  updateMrNote: mockUpdateMrNote,
-  deleteMrNote: mockDeleteMrNote,
+  fetchChangeRequest: mock(async () => {
+    throw new Error('unused')
+  }),
+  fetchDiffRefs: mock(async () => ({ baseSha: 'base', headSha: 'head', startSha: 'start' })),
+  fetchChangedFiles: mock(async () => []),
+  listNotes: mock(async () => []),
+  createNote: mock(async () => ({ id: 1, body: '', author: null })),
+  updateNote: mock(async () => ({ id: 1, body: '', author: null })),
+  deleteNote: mock(async () => {}),
+  listThreads: mockListThreads,
+  getThread: mockGetThread,
+  createThread: mockCreateThread,
+  replyToThread: mockReplyToThread,
+  resolveThread: mockResolveThread,
+  addNoteReaction: mock(async () => {}),
+  addThreadMessageReaction: mockAddThreadMessageReaction,
+  publishReviewBatch: mock(async () => ({
+    preExistingDraftCount: 0,
+    recoveredDraftCount: 0,
+    draftRecoveryAction: 'none' as const,
+    summaryNoteId: 1,
+    summaryReconciled: false,
+  })),
 }))
 
-mock.module('@/integrations/gitlab/discussions', () => ({
-  getMrDiscussion: mockGetMrDiscussion,
-  listMrDiscussions: mockListMrDiscussions,
-  createDiscussion: mockCreateDiscussion,
-  replyToDiscussion: mockReplyToDiscussion,
-  resolveDiscussion: mockResolveDiscussion,
-}))
-
-mock.module('@/integrations/gitlab/reactions', () => ({
-  addDiscussionNoteReaction: mockAddDiscussionNoteReaction,
+mock.module('@/integrations/provider/client', () => ({
+  createReviewProvider: mockCreateReviewProvider,
 }))
 
 const addedReactionNames = (): string[] =>
-  mockAddDiscussionNoteReaction.mock.calls
-    .map((call) => (call as unknown[])[1])
-    .filter(
-      (value): value is { name: string } =>
-        typeof value === 'object' &&
-        value !== null &&
-        'name' in value &&
-        typeof value.name === 'string',
-    )
-    .map((value) => value.name)
+  mockAddThreadMessageReaction.mock.calls
+    .map((call) => (call as unknown[])[2])
+    .filter((value): value is string => typeof value === 'string')
 
 const mockGetReviewThreadByProviderThreadId = mock<
   (...args: unknown[]) => Promise<ReviewThreadRecord | null>
@@ -502,56 +494,54 @@ const makeNotePayload = (overrides: Record<string, unknown> = {}) => ({
   },
 })
 
-const makeBotNote = (overrides: Partial<DiscussionNote> = {}): DiscussionNote => ({
-  id: 500,
+const makeBotNote = (overrides: Partial<ProviderThreadMessage> = {}): ProviderThreadMessage => ({
+  id: '500',
   body: 'Original review comment from bot',
   author: { id: 100, username: 'mend-bot', raw: {} },
-  type: 'DiffNote',
   resolvable: true,
   resolved: false,
   createdAt: '2026-03-08T00:00:00.000Z',
   updatedAt: '2026-03-08T00:00:00.000Z',
   url: 'https://gitlab.example.com/note/500',
-  position: { new_path: 'src/app.ts', new_line: 42 },
+  position: { path: 'src/app.ts', oldPath: null, line: 42, oldLine: null },
   raw: {},
   ...overrides,
 })
 
-const makeHumanNote = (overrides: Partial<DiscussionNote> = {}): DiscussionNote => ({
-  id: 999,
+const makeHumanNote = (overrides: Partial<ProviderThreadMessage> = {}): ProviderThreadMessage => ({
+  id: '999',
   body: 'This is a false positive.',
   author: { id: 200, username: 'developer', raw: {} },
-  type: 'DiffNote',
   resolvable: true,
   resolved: false,
   createdAt: '2026-03-09T00:00:00.000Z',
   updatedAt: '2026-03-09T00:00:00.000Z',
   url: 'https://gitlab.example.com/note/999',
-  position: { new_path: 'src/app.ts', new_line: 42 },
+  position: { path: 'src/app.ts', oldPath: null, line: 42, oldLine: null },
   raw: {},
   ...overrides,
 })
 
 const makeDiscussion = (
-  overrides: Partial<Discussion> & { notes?: DiscussionNote[] } = {},
-): Discussion => ({
+  overrides: Partial<ProviderThread> & { messages?: ProviderThreadMessage[] } = {},
+): ProviderThread => ({
   id: 'discussion-abc',
-  individual_note: false,
-  notes: [makeBotNote(), makeHumanNote()],
+  isThread: true,
+  messages: [makeBotNote(), makeHumanNote()],
   raw: {},
   ...overrides,
 })
 
-const makeReplyNote = (overrides: Partial<DiscussionNote> = {}): DiscussionNote => ({
-  id: 1001,
+const makeReplyNote = (overrides: Partial<ProviderThreadMessage> = {}): ProviderThreadMessage => ({
+  id: '1001',
   body: 'Reply from bot',
   author: { id: 100, username: 'mend-bot', raw: {} },
-  type: 'DiffNote',
   resolvable: true,
   resolved: false,
   createdAt: '2026-03-09T01:00:00.000Z',
   updatedAt: '2026-03-09T01:00:00.000Z',
   url: 'https://gitlab.example.com/note/1001',
+  position: null,
   raw: {},
   ...overrides,
 })
@@ -676,13 +666,13 @@ const makeMemoryEvent = (
 })
 
 const setupMendOwnedThread = (
-  discussion: Discussion,
+  discussion: ProviderThread,
   agentMessages: ReviewMessageRecord[] = [makeAgentMessage()],
 ) => {
   const thread = makeThread()
   mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
   mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve(agentMessages))
-  mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+  mockGetThread.mockImplementation(() => Promise.resolve(discussion))
   mockUpsertReviewThread.mockImplementation(() => Promise.resolve(thread))
   mockCreateReviewMessageIfAbsent.mockImplementation(() => Promise.resolve(makeMessage()))
   return thread
@@ -691,16 +681,11 @@ const setupMendOwnedThread = (
 describe('processGitlabMergeRequestNote', () => {
   beforeEach(() => {
     mockFetchCurrentUser.mockReset()
-    mockListMrNotes.mockReset()
-    mockCreateDraftNote.mockReset()
-    mockBulkPublishDrafts.mockReset()
-    mockListMrDraftNotes.mockReset()
-    mockDeleteDraftNote.mockReset()
-    mockGetMrDiscussion.mockReset()
-    mockListMrDiscussions.mockReset()
-    mockReplyToDiscussion.mockReset()
-    mockResolveDiscussion.mockReset()
-    mockAddDiscussionNoteReaction.mockReset()
+    mockGetThread.mockReset()
+    mockListThreads.mockReset()
+    mockReplyToThread.mockReset()
+    mockResolveThread.mockReset()
+    mockAddThreadMessageReaction.mockReset()
     mockGetReviewThreadByProviderThreadId.mockReset()
     mockListReviewMessagesForThread.mockReset()
     mockUpsertReviewThread.mockReset()
@@ -724,16 +709,11 @@ describe('processGitlabMergeRequestNote', () => {
     mockFetchCurrentUser.mockImplementation(() =>
       Promise.resolve({ id: 100, username: 'mend-bot' }),
     )
-    mockListMrNotes.mockImplementation(() => Promise.resolve([]))
-    mockCreateDraftNote.mockImplementation(() => Promise.resolve({ id: 1 }))
-    mockBulkPublishDrafts.mockImplementation(() => Promise.resolve())
-    mockListMrDraftNotes.mockImplementation(() => Promise.resolve([]))
-    mockDeleteDraftNote.mockImplementation(() => Promise.resolve())
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(makeDiscussion()))
-    mockListMrDiscussions.mockImplementation(() => Promise.resolve([]))
-    mockReplyToDiscussion.mockImplementation(() => Promise.resolve(makeReplyNote()))
-    mockResolveDiscussion.mockImplementation(() => Promise.resolve())
-    mockAddDiscussionNoteReaction.mockImplementation(() => Promise.resolve())
+    mockGetThread.mockImplementation(() => Promise.resolve(makeDiscussion()))
+    mockListThreads.mockImplementation(() => Promise.resolve([]))
+    mockReplyToThread.mockImplementation(() => Promise.resolve(makeReplyNote()))
+    mockResolveThread.mockImplementation(() => Promise.resolve())
+    mockAddThreadMessageReaction.mockImplementation(() => Promise.resolve())
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(null))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([]))
     mockUpsertReviewThread.mockImplementation(() => Promise.resolve(makeThread()))
@@ -771,9 +751,9 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject({ enabled: true }), payload })
 
-    expect(mockGetMrDiscussion).not.toHaveBeenCalled()
+    expect(mockGetThread).not.toHaveBeenCalled()
     expect(mockCreateReviewMessageIfAbsent).not.toHaveBeenCalled()
-    expect(mockAddDiscussionNoteReaction).not.toHaveBeenCalled()
+    expect(mockAddThreadMessageReaction).not.toHaveBeenCalled()
   })
 
   test('skips non-MR notes', async () => {
@@ -782,7 +762,7 @@ describe('processGitlabMergeRequestNote', () => {
     await processGitlabMergeRequestNote({ project: makeProject({ enabled: true }), payload })
 
     expect(mockFetchCurrentUser).not.toHaveBeenCalled()
-    expect(mockGetMrDiscussion).not.toHaveBeenCalled()
+    expect(mockGetThread).not.toHaveBeenCalled()
   })
 
   test('skips non-create note actions', async () => {
@@ -790,9 +770,9 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject({ enabled: true }), payload })
 
-    expect(mockGetMrDiscussion).not.toHaveBeenCalled()
+    expect(mockGetThread).not.toHaveBeenCalled()
     expect(mockCreateReviewMessageIfAbsent).not.toHaveBeenCalled()
-    expect(mockAddDiscussionNoteReaction).not.toHaveBeenCalled()
+    expect(mockAddThreadMessageReaction).not.toHaveBeenCalled()
   })
 
   test('skips API fetch when thread exists locally with reviewRunId and outbound message', async () => {
@@ -806,38 +786,38 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockGetMrDiscussion).not.toHaveBeenCalled()
-    expect(mockListMrDiscussions).not.toHaveBeenCalled()
+    expect(mockGetThread).not.toHaveBeenCalled()
+    expect(mockListThreads).not.toHaveBeenCalled()
   })
 
   test('fetches single discussion when discussion_id is present but no local thread', async () => {
     const discussion = makeDiscussion()
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
 
     const payload = makeNotePayload({ note: 'This is a false positive.' })
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockGetMrDiscussion).toHaveBeenCalledTimes(1)
-    expect(mockListMrDiscussions).not.toHaveBeenCalled()
+    expect(mockGetThread).toHaveBeenCalledTimes(1)
+    expect(mockListThreads).not.toHaveBeenCalled()
   })
 
-  test('falls back to listMrDiscussions when discussion_id is absent', async () => {
+  test('falls back to listThreads when discussion_id is absent', async () => {
     const discussion = makeDiscussion()
-    mockListMrDiscussions.mockImplementation(() => Promise.resolve([discussion]))
+    mockListThreads.mockImplementation(() => Promise.resolve([discussion]))
 
     const payload = makeNotePayload({ note: 'This is a false positive.' })
     delete (payload.object_attributes as Record<string, unknown>).discussion_id
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockGetMrDiscussion).not.toHaveBeenCalled()
-    expect(mockListMrDiscussions).toHaveBeenCalledTimes(1)
+    expect(mockGetThread).not.toHaveBeenCalled()
+    expect(mockListThreads).toHaveBeenCalledTimes(1)
   })
 
   test('accept command updates the persisted finding decision only', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend accept' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend accept' })],
     })
     setupMendOwnedThread(discussion)
     mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(makeFinding()))
@@ -856,17 +836,14 @@ describe('processGitlabMergeRequestNote', () => {
       }),
     )
     expect(mockCreateReviewMemoryEntry).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockReplyToThread).not.toHaveBeenCalled()
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
     expect(mockCompleteReviewMessageProcessing).toHaveBeenCalled()
   })
 
   test('reject command uses a default reason when omitted', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend reject' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend reject' })],
     })
     setupMendOwnedThread(discussion)
     mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(makeFinding()))
@@ -881,13 +858,12 @@ describe('processGitlabMergeRequestNote', () => {
         decisionReason: 'Rejected by human triage.',
       }),
     )
-    expect(mockReplyToDiscussion).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mockReplyToThread).toHaveBeenCalledWith(
       42,
       'discussion-abc',
       'Marked as rejected: Rejected by human triage.',
     )
-    expect(mockResolveDiscussion).toHaveBeenCalledWith(expect.anything(), 42, 'discussion-abc')
+    expect(mockResolveThread).toHaveBeenCalledWith(42, 'discussion-abc')
     expect(mockUpdateReviewThreadStatusByProviderThreadId).toHaveBeenCalledWith({
       provider: 'gitlab',
       providerThreadId: 'discussion-abc',
@@ -897,7 +873,7 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('defer command requires a reason before updating a finding', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend defer' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend defer' })],
     })
     setupMendOwnedThread(discussion)
     mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(makeFinding()))
@@ -907,14 +883,14 @@ describe('processGitlabMergeRequestNote', () => {
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
     expect(mockUpdateReviewFindingState).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
+    expect(mockReplyToThread).not.toHaveBeenCalled()
     expect(addedReactionNames()).not.toContain('white_check_mark')
     expect(mockCompleteReviewMessageProcessing).toHaveBeenCalled()
   })
 
   test('defer command stores the provided reason', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend defer waiting for API contract' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend defer waiting for API contract' })],
     })
     setupMendOwnedThread(discussion)
     mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(makeFinding()))
@@ -929,18 +905,17 @@ describe('processGitlabMergeRequestNote', () => {
         decisionReason: 'waiting for API contract',
       }),
     )
-    expect(mockReplyToDiscussion).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mockReplyToThread).toHaveBeenCalledWith(
       42,
       'discussion-abc',
       'Deferred: waiting for API contract',
     )
-    expect(mockResolveDiscussion).toHaveBeenCalledWith(expect.anything(), 42, 'discussion-abc')
+    expect(mockResolveThread).toHaveBeenCalledWith(42, 'discussion-abc')
   })
 
   test('command on a thread without a persisted finding does not mutate finding state', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend accept' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend accept' })],
     })
     setupMendOwnedThread(discussion)
     mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(null))
@@ -956,7 +931,7 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('fix accepted command queues an accepted finding batch', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: '@mend fix accepted' })],
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend fix accepted' })],
     })
     setupMendOwnedThread(discussion)
 
@@ -978,11 +953,8 @@ describe('processGitlabMergeRequestNote', () => {
     )
     expect(mockUpdateReviewFindingState).not.toHaveBeenCalled()
     expect(mockCreateReviewMemoryEntry).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockReplyToThread).not.toHaveBeenCalled()
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
     expect(mockCompleteReviewMessageProcessing).toHaveBeenCalled()
   })
 
@@ -994,48 +966,39 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'eyes' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'eyes')
 
     expect(mockCreateReviewMemoryEntry).toHaveBeenCalledTimes(1)
     const memoryCall = mockCreateReviewMemoryEntry.mock.calls[0]![0] as Record<string, unknown>
     expect(memoryCall.scope).toBe('mr')
     expect(memoryCall.kind).toBe('false_positive')
 
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
+    expect(mockReplyToThread).not.toHaveBeenCalled()
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
 
     expect(mockCompleteReviewMessageProcessing).toHaveBeenCalled()
   })
 
   test('processes ambiguous dismissal with clarification reply — no memory, no success reaction', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'This is fine.' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'This is fine.' })],
     })
     setupMendOwnedThread(discussion)
     const payload = makeNotePayload({ note: 'This is fine.' })
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'eyes' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'eyes')
 
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain('Should I remember this just for this merge request')
 
     expect(mockCreateReviewMemoryEntry).not.toHaveBeenCalled()
 
-    const reactionNames = (mockAddDiscussionNoteReaction.mock.calls as unknown[][]).map(
+    const reactionNames = (mockAddThreadMessageReaction.mock.calls as unknown[][]).map(
       (call) => (call[1] as Record<string, unknown>).name,
     )
     expect(reactionNames).not.toContain('white_check_mark')
@@ -1045,7 +1008,7 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('processes question with LLM reply when review run has sourceBranch', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     setupMendOwnedThread(discussion)
     mockGetLatestSuccessfulReviewRun.mockImplementation(() =>
@@ -1094,20 +1057,17 @@ describe('processGitlabMergeRequestNote', () => {
     expect(replyParams.filePath).toBe('src/app.ts')
     expect(replyParams.userQuestion).toBe('Why did you flag this?')
 
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toBe('LLM-generated reply about the code.')
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
   })
 
   test('uses discussion first note as original finding when no local outbound message exists', async () => {
     const discussion = makeDiscussion({
-      notes: [
+      messages: [
         makeBotNote({ body: 'Original review comment from discussion' }),
         makeHumanNote({ body: 'Why did you flag this?' }),
       ],
@@ -1115,7 +1075,7 @@ describe('processGitlabMergeRequestNote', () => {
     const thread = makeThread()
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
     mockGetLatestSuccessfulReviewRun.mockImplementation(() =>
       Promise.resolve({
         id: 'run-1',
@@ -1151,7 +1111,7 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockGetMrDiscussion).toHaveBeenCalledTimes(1)
+    expect(mockGetThread).toHaveBeenCalledTimes(1)
     const replyParams = (mockGenerateThreadReply.mock.calls[0] as unknown[])[0] as Record<
       string,
       unknown
@@ -1161,7 +1121,7 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('falls back to error message when LLM reply fails', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     setupMendOwnedThread(discussion)
     mockGetLatestSuccessfulReviewRun.mockImplementation(() =>
@@ -1200,20 +1160,20 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain("wasn't able to generate a detailed response")
   })
 
   test('prefers the thread review run over the latest successful run for LLM context', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     const thread = makeThread({ reviewRunId: 'thread-run-1' })
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([makeAgentMessage()]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
 
     mockGetLatestSuccessfulReviewRun.mockImplementation(() =>
       Promise.resolve({
@@ -1290,12 +1250,12 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('uses graceful fallback when a known thread review run cannot be loaded', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     const thread = makeThread({ reviewRunId: 'missing-run' })
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([makeAgentMessage()]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
     mockGetLatestSuccessfulReviewRun.mockImplementation(() =>
       Promise.resolve({
         id: 'latest-run',
@@ -1333,15 +1293,15 @@ describe('processGitlabMergeRequestNote', () => {
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
     expect(mockGenerateThreadReply).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain('could not load the exact reviewed code context')
   })
 
   test('recovers missing thread reviewRunId from discussion markers for existing local thread', async () => {
     const discussion = makeDiscussion({
-      notes: [
+      messages: [
         makeBotNote({
           body: appendInlineMarkers(
             'Original review comment from bot',
@@ -1356,7 +1316,7 @@ describe('processGitlabMergeRequestNote', () => {
     const thread = makeThread({ reviewRunId: null })
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([makeAgentMessage()]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
     mockUpsertReviewThread.mockImplementation(() =>
       Promise.resolve(makeThread({ reviewRunId: 'thread-run-1' })),
     )
@@ -1425,7 +1385,7 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockGetMrDiscussion).toHaveBeenCalledTimes(1)
+    expect(mockGetThread).toHaveBeenCalledTimes(1)
     expect(mockGetReviewRun).toHaveBeenCalledWith('thread-run-1')
     const replyParams = (mockGenerateThreadReply.mock.calls[0] as unknown[])[0] as Record<
       string,
@@ -1437,7 +1397,7 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('replies with graceful fallback when no review run with sourceBranch is available', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     setupMendOwnedThread(discussion)
 
@@ -1446,12 +1406,12 @@ describe('processGitlabMergeRequestNote', () => {
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
     expect(mockGenerateThreadReply).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain('could not load the exact reviewed code context')
 
-    const reactionNames = (mockAddDiscussionNoteReaction.mock.calls as unknown[][]).map(
+    const reactionNames = (mockAddThreadMessageReaction.mock.calls as unknown[][]).map(
       (call) => (call[1] as Record<string, unknown>).name,
     )
     expect(reactionNames).not.toContain('white_check_mark')
@@ -1459,12 +1419,12 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('stores inbound messages under thread reviewRunId when available', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
+      messages: [makeBotNote(), makeHumanNote({ body: 'Why did you flag this?' })],
     })
     const thread = makeThread({ reviewRunId: 'thread-run-1' })
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([makeAgentMessage()]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
 
     const payload = makeNotePayload({ note: 'Why did you flag this?' })
 
@@ -1477,10 +1437,10 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('processes testing project rule from trusted user — creates project memory, posts confirmation, resolves thread', async () => {
     const discussion = makeDiscussion({
-      notes: [
+      messages: [
         makeBotNote(),
         makeHumanNote({
-          id: 999,
+          id: '999',
           body: "We don't use component tests in this project.",
           author: { id: 300, username: 'trusted-user', raw: {} },
         }),
@@ -1499,12 +1459,12 @@ describe('processGitlabMergeRequestNote', () => {
     expect(memoryCall.scope).toBe('project')
     expect(memoryCall.matchCategory).toBe('testing')
 
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain('project guidance')
 
-    expect(mockResolveDiscussion).toHaveBeenCalledTimes(1)
+    expect(mockResolveThread).toHaveBeenCalledTimes(1)
     expect(mockUpdateReviewThreadStatusByProviderThreadId).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'resolved' }),
     )
@@ -1512,10 +1472,10 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('falls back to MR memory for testing rule from untrusted user — mentions trusted users', async () => {
     const discussion = makeDiscussion({
-      notes: [
+      messages: [
         makeBotNote(),
         makeHumanNote({
-          id: 999,
+          id: '999',
           body: "We don't use component tests in this project.",
         }),
       ],
@@ -1532,15 +1492,15 @@ describe('processGitlabMergeRequestNote', () => {
     expect(memoryCall.scope).toBe('mr')
     expect(memoryCall.matchCategory).toBe('testing')
 
-    expect(mockReplyToDiscussion).toHaveBeenCalledTimes(1)
-    const replyCall = mockReplyToDiscussion.mock.calls[0] as unknown[]
-    const replyBody = replyCall[3] as string
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    const replyCall = mockReplyToThread.mock.calls[0] as unknown[]
+    const replyBody = replyCall[2] as string
     expect(replyBody).toContain('trusted users')
   })
 
   test('handles deferred dismissal — creates MR memory with kind defer_to_later, no reply', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: "We'll handle this in the next MR." })],
+      messages: [makeBotNote(), makeHumanNote({ body: "We'll handle this in the next MR." })],
     })
     setupMendOwnedThread(discussion)
     const payload = makeNotePayload({ note: "We'll handle this in the next MR." })
@@ -1552,12 +1512,9 @@ describe('processGitlabMergeRequestNote', () => {
     expect(memoryCall.scope).toBe('mr')
     expect(memoryCall.kind).toBe('defer_to_later')
 
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
+    expect(mockReplyToThread).not.toHaveBeenCalled()
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
   })
 
   test('handles duplicate note — conflict on insert and claim fails — returns without processing', async () => {
@@ -1574,8 +1531,8 @@ describe('processGitlabMergeRequestNote', () => {
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockAddDiscussionNoteReaction).not.toHaveBeenCalled()
-    expect(mockReplyToDiscussion).not.toHaveBeenCalled()
+    expect(mockAddThreadMessageReaction).not.toHaveBeenCalled()
+    expect(mockReplyToThread).not.toHaveBeenCalled()
     expect(mockCreateReviewMemoryEntry).not.toHaveBeenCalled()
     expect(mockCompleteReviewMessageProcessing).not.toHaveBeenCalled()
   })
@@ -1600,14 +1557,14 @@ describe('processGitlabMergeRequestNote', () => {
 
   test('resolves thread when plan says resolveThread — for MR-scoped dismissal', async () => {
     const discussion = makeDiscussion({
-      notes: [makeBotNote(), makeHumanNote({ body: "Don't flag this again for this MR." })],
+      messages: [makeBotNote(), makeHumanNote({ body: "Don't flag this again for this MR." })],
     })
     setupMendOwnedThread(discussion)
     const payload = makeNotePayload({ note: "Don't flag this again for this MR." })
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockResolveDiscussion).toHaveBeenCalledTimes(1)
+    expect(mockResolveThread).toHaveBeenCalledTimes(1)
     expect(mockUpdateReviewThreadStatusByProviderThreadId).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: 'gitlab',
@@ -1621,17 +1578,13 @@ describe('processGitlabMergeRequestNote', () => {
     expect(memoryCall.scope).toBe('mr')
     expect(memoryCall.kind).toBe('ignore_this_mr')
 
-    expect(mockAddDiscussionNoteReaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ name: 'white_check_mark' }),
-    )
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
   })
 
   test('resolves summary_finding thread when plan says resolveThread', async () => {
     const discussion = makeDiscussion({
-      notes: [
+      messages: [
         makeBotNote({
-          type: null,
           position: null,
           body: appendSummaryFindingMarkers('Finding thread text.', 'run-789', {
             fingerprint: 'summary_finding:dup-layout',
@@ -1640,7 +1593,7 @@ describe('processGitlabMergeRequestNote', () => {
             line: 21,
           }),
         }),
-        makeHumanNote({ body: "Don't flag this again for this MR.", type: null, position: null }),
+        makeHumanNote({ body: "Don't flag this again for this MR.", position: null }),
       ],
     })
     const thread = makeThread({
@@ -1651,13 +1604,13 @@ describe('processGitlabMergeRequestNote', () => {
     })
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(thread))
     mockListReviewMessagesForThread.mockImplementation(() => Promise.resolve([makeAgentMessage()]))
-    mockGetMrDiscussion.mockImplementation(() => Promise.resolve(discussion))
+    mockGetThread.mockImplementation(() => Promise.resolve(discussion))
 
     const payload = makeNotePayload({ note: "Don't flag this again for this MR." })
 
     await processGitlabMergeRequestNote({ project: makeProject(), payload })
 
-    expect(mockResolveDiscussion).toHaveBeenCalledTimes(1)
+    expect(mockResolveThread).toHaveBeenCalledTimes(1)
     expect(mockUpdateReviewThreadStatusByProviderThreadId).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: 'gitlab',

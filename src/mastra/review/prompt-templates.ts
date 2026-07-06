@@ -35,7 +35,7 @@ const formatFindingDetailed = (f: PreviousFinding): string =>
     `- **[${f.id}]** (${f.category} / ${f.severity}) ${f.title}`,
     `  ${f.body}`,
     f.files.length > 0 ? `  Files: ${f.files.join(', ')}` : null,
-    `  Status: ${f.discussionId ? (f.resolved ? 'resolved on GitLab' : 'open on GitLab') : 'not tracked on GitLab'}`,
+    `  Status: ${f.discussionId ? (f.resolved ? 'resolved on the code host' : 'open on the code host') : 'not tracked on the code host'}`,
   ]
     .filter(Boolean)
     .join('\n')
@@ -47,7 +47,7 @@ const formatInlineDetailed = (c: PreviousInlineComment): string =>
   [
     `- ${c.file}:${c.line}`,
     `  ${c.body}`,
-    `  Status: ${c.resolved ? 'resolved on GitLab' : 'unresolved'}`,
+    `  Status: ${c.resolved ? 'resolved on the code host' : 'unresolved'}`,
   ].join('\n')
 
 const formatInlineSummary = (c: PreviousInlineComment): string =>
@@ -102,7 +102,7 @@ const buildPreviousContextSections = (ctx: PreviousReviewContext): string[] => {
 export const RESOLUTION_INSTRUCTIONS = [
   '## Resolution Verification',
   '',
-  'For each previous inline comment and each previous finding tracked on GitLab:',
+  'For each previous inline comment and each previous finding tracked on the code host:',
   '- Check whether the current changes address the concern',
   '- Include a resolutionVerdicts array in your output',
   '- For inline comments, set previousFindingId to the file:line identifier (e.g., "src/components/Table.vue:42")',
@@ -111,7 +111,7 @@ export const RESOLUTION_INSTRUCTIONS = [
   '- Use "not_fixed" when the issue persists unchanged',
   '- Use "partially_fixed" when the fix is incomplete',
   '- Use "cannot_determine" when the code changed too much to tell',
-  '- Do not include previous findings marked as not tracked on GitLab in resolutionVerdicts',
+  '- Do not include previous findings marked as not tracked on the code host in resolutionVerdicts',
   '- Do not let resolution checking distract from reviewing new changes — new issues take priority',
 ].join('\n')
 

@@ -1,7 +1,7 @@
-import type { GitLabClient } from '@/integrations/gitlab/client'
+import type { ReviewProvider } from '@/integrations/provider/client'
+import type { ProviderThreadMessage } from '@/integrations/provider/types'
 import type { PlannedThreadResolution } from '@/mastra/review/publish-plan'
-import { persistGitLabReplyLocally } from '@/server/thread-sync'
-import type { DiscussionNote } from '@/integrations/gitlab/discussions'
+import { persistProviderReplyLocally } from '@/server/thread-sync'
 import { toErrorMessage } from '@/lib/errors'
 
 export interface ResolutionStats {
@@ -11,15 +11,15 @@ export interface ResolutionStats {
 }
 
 interface ThreadResolutionDependencies {
-  persistReply: typeof persistGitLabReplyLocally
+  persistReply: typeof persistProviderReplyLocally
 }
 
 const defaultDependencies: ThreadResolutionDependencies = {
-  persistReply: persistGitLabReplyLocally,
+  persistReply: persistProviderReplyLocally,
 }
 
 export const executeThreadResolutions = async (params: {
-  gitlab: GitLabClient
+  provider: ReviewProvider
   mrIid: number
   reviewRunId: string
   resolutions: PlannedThreadResolution[]
@@ -31,10 +31,10 @@ export const executeThreadResolutions = async (params: {
   let partiallyFixedThreadCount = 0
 
   for (const resolution of params.resolutions) {
-    let reply: DiscussionNote
+    let reply: ProviderThreadMessage
 
     try {
-      reply = await params.gitlab.replyToDiscussion(
+      reply = await params.provider.replyToThread(
         params.mrIid,
         resolution.discussionId,
         resolution.replyBody,
@@ -46,7 +46,7 @@ export const executeThreadResolutions = async (params: {
 
     if (resolution.markResolved) {
       try {
-        await params.gitlab.resolveDiscussion(params.mrIid, resolution.discussionId)
+        await params.provider.resolveThread(params.mrIid, resolution.discussionId)
       } catch (err) {
         console.warn(
           `[post] failed to resolve thread ${resolution.discussionId} after replying: ${err}`,
@@ -57,7 +57,7 @@ export const executeThreadResolutions = async (params: {
 
     try {
       await dependencies.persistReply({
-        discussionId: resolution.discussionId,
+        threadId: resolution.discussionId,
         reviewRunId: params.reviewRunId,
         reply,
         markResolved: resolution.markResolved,

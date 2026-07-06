@@ -1,8 +1,7 @@
-import type { GitLabClient } from '@/integrations/gitlab/client'
 import type { ProjectConfig } from '@/config'
-import { createWithReconciliation } from '@/integrations/gitlab/idempotent'
-import type { Discussion } from '@/integrations/gitlab/discussions'
-import type { MrDraftNote, MrNote } from '@/integrations/gitlab/notes'
+import { createWithReconciliation } from '@/integrations/idempotent'
+import type { ReviewProvider } from '@/integrations/provider/client'
+import type { ProviderNote, ProviderThread } from '@/integrations/provider/types'
 import { toErrorMessage } from '@/lib/errors'
 import { buildInlineThreadFingerprint } from '@/lib/review-threads'
 import { formatCommentBody } from '@/mastra/review/formatting'
@@ -16,173 +15,50 @@ import type {
   ThreadedInlineComment,
 } from '@/mastra/review/run-result'
 import { executeThreadResolutions, type ResolutionStats } from '@/server/thread-resolution'
-import {
-  persistPostedReviewFindings,
-  persistPublishedGitLabDiscussions,
-} from '@/server/thread-sync'
-
-const findDraftByBody = (drafts: MrDraftNote[], body: string): MrDraftNote | undefined =>
-  drafts.find((draft) => draft.body === body)
+import { persistPostedReviewFindings, persistPublishedThreads } from '@/server/thread-sync'
 
 export const findPublishedSummaryForRun = (
-  notes: MrNote[],
+  notes: ProviderNote[],
   reviewRunId: string,
-): MrNote | undefined =>
+): ProviderNote | undefined =>
   notes.find((note) => {
     const markers = parseMendMarkers(note.body)
     return markers.runId === reviewRunId && markers.isSummary
   })
 
-export const findMrNoteByBody = (notes: MrNote[], body: string): MrNote | undefined =>
+export const findMrNoteByBody = (notes: ProviderNote[], body: string): ProviderNote | undefined =>
   notes.find((note) => note.body === body)
 
-const findDiscussionByBody = (discussions: Discussion[], body: string): Discussion | undefined =>
-  discussions.find((discussion) => discussion.notes[0]?.body === body)
-
-const classifyAndCleanPreExistingDrafts = async (params: {
-  gitlab: GitLabClient
-  projectKey: string
-  mrIid: number
-  reviewRunId: string
-}): Promise<{
-  preExistingDraftCount: number
-  recoveredDraftCount: number
-  draftRecoveryAction: 'none' | 'reused' | 'cleaned'
-}> => {
-  const preExistingDrafts = await params.gitlab.listMrDraftNotes(params.mrIid)
-  const preExistingDraftCount = preExistingDrafts.length
-
-  if (preExistingDraftCount === 0) {
-    return {
-      preExistingDraftCount,
-      recoveredDraftCount: 0,
-      draftRecoveryAction: 'none',
-    }
-  }
-
-  const currentRunDrafts = preExistingDrafts.filter((draft) =>
-    isCurrentRunDraft(draft.body, params.reviewRunId),
-  )
-
-  if (currentRunDrafts.length === preExistingDraftCount) {
-    for (const draft of currentRunDrafts) {
-      await params.gitlab.deleteDraftNote(params.mrIid, draft.id)
-    }
-
-    return {
-      preExistingDraftCount,
-      recoveredDraftCount: currentRunDrafts.length,
-      draftRecoveryAction: 'cleaned',
-    }
-  }
-
-  const otherRunMendDraftCount = preExistingDrafts.filter(
-    (draft) => isMendDraft(draft.body) && !isCurrentRunDraft(draft.body, params.reviewRunId),
-  ).length
-  const foreignDraftCount = preExistingDraftCount - currentRunDrafts.length - otherRunMendDraftCount
-
-  throw new Error(
-    `Refusing to bulk publish drafts for ${params.projectKey} MR !${params.mrIid}: found ${preExistingDraftCount} pre-existing draft notes (${currentRunDrafts.length} current-run, ${otherRunMendDraftCount} other-run, ${foreignDraftCount} foreign)`,
-  )
-}
-
-const createDraftNoteWithReconciliation = async (params: {
-  gitlab: GitLabClient
-  mrIid: number
-  note: string
-  position: PostPlan['inlineDrafts'][number]['position']
-}): Promise<{ id: number; reconciled: boolean }> => {
-  const result = await createWithReconciliation({
-    action: 'Draft note creation',
-    create: async () =>
-      await params.gitlab.createDraftNote(params.mrIid, params.note, params.position),
-    list: async () => await params.gitlab.listMrDraftNotes(params.mrIid),
-    match: (drafts) => findDraftByBody(drafts, params.note),
-  })
-
-  return { id: result.value.id, reconciled: result.reconciled }
-}
-
-const bulkPublishDraftsWithReconciliation = async (params: {
-  gitlab: GitLabClient
-  mrIid: number
-  reviewRunId: string
-}): Promise<{ reconciled: boolean }> => {
-  const result = await createWithReconciliation({
-    action: 'Draft bulk publish',
-    create: async () => {
-      await params.gitlab.bulkPublishDrafts(params.mrIid)
-      return true
-    },
-    list: async () => await params.gitlab.listMrDraftNotes(params.mrIid),
-    match: async (drafts) => {
-      const remainingCurrentRunDrafts = drafts.filter((draft) =>
-        isCurrentRunDraft(draft.body, params.reviewRunId),
-      )
-
-      if (remainingCurrentRunDrafts.length === 0) {
-        return true
-      }
-
-      for (const draft of remainingCurrentRunDrafts) {
-        await params.gitlab.publishDraftNote(params.mrIid, draft.id)
-      }
-
-      const draftsAfterIndividualPublish = await params.gitlab.listMrDraftNotes(params.mrIid)
-      const remainingCurrentRunDraftsAfterIndividualPublish = draftsAfterIndividualPublish.filter(
-        (draft) => isCurrentRunDraft(draft.body, params.reviewRunId),
-      )
-
-      return remainingCurrentRunDraftsAfterIndividualPublish.length === 0 ? true : undefined
-    },
-  })
-
-  return { reconciled: result.reconciled }
-}
-
-const createMrNoteWithReconciliation = async (params: {
-  gitlab: GitLabClient
-  mrIid: number
-  body: string
-  reviewRunId: string
-}): Promise<{ id: number; reconciled: boolean }> => {
-  const result = await createWithReconciliation({
-    action: 'Summary note creation',
-    create: async () => await params.gitlab.createMrNote(params.mrIid, params.body),
-    list: async () => await params.gitlab.listMrNotes(params.mrIid),
-    match: (notes) => findPublishedSummaryForRun(notes, params.reviewRunId),
-  })
-
-  return { id: result.value.id, reconciled: result.reconciled }
-}
+const findThreadByBody = (threads: ProviderThread[], body: string): ProviderThread | undefined =>
+  threads.find((thread) => thread.messages[0]?.body === body)
 
 const createDiscussionWithReconciliation = async (params: {
-  gitlab: GitLabClient
+  provider: ReviewProvider
   mrIid: number
   body: string
-}): Promise<{ discussion: Discussion; reconciled: boolean }> => {
+}): Promise<{ thread: ProviderThread; reconciled: boolean }> => {
   const result = await createWithReconciliation({
     action: 'Discussion creation',
-    create: async () => await params.gitlab.createDiscussion(params.mrIid, params.body),
-    list: async () => await params.gitlab.listMrDiscussions(params.mrIid),
-    match: (discussions) => findDiscussionByBody(discussions, params.body),
+    create: async () => await params.provider.createThread(params.mrIid, params.body),
+    list: async () => await params.provider.listThreads(params.mrIid),
+    match: (threads) => findThreadByBody(threads, params.body),
   })
 
-  return { discussion: result.value, reconciled: result.reconciled }
+  return { thread: result.value, reconciled: result.reconciled }
 }
 
 export const createMrNoteOnceByBody = async (params: {
-  gitlab: GitLabClient
+  provider: ReviewProvider
   mrIid: number
   body: string
 }): Promise<{ id: number; reconciled: boolean }> => {
-  const notes = await params.gitlab.listMrNotes(params.mrIid)
+  const notes = await params.provider.listNotes(params.mrIid)
   const existing = findMrNoteByBody(notes, params.body)
   if (existing) {
     return { id: existing.id, reconciled: true }
   }
 
-  const created = await params.gitlab.createMrNote(params.mrIid, params.body)
+  const created = await params.provider.createNote(params.mrIid, params.body)
   return { id: created.id, reconciled: false }
 }
 
@@ -202,15 +78,29 @@ export interface PostExecutionResult {
 export const executePostPlan = async (params: {
   plan: PostPlan
   project: ProjectConfig
-  gitlab: GitLabClient
+  provider: ReviewProvider
 }): Promise<PostExecutionResult> => {
-  const { plan, gitlab, project } = params
+  const { plan, provider, project } = params
   const input = plan.input
-  const draftRecovery = await classifyAndCleanPreExistingDrafts({
-    gitlab,
+  const publishResult = await provider.publishReviewBatch({
+    changeNumber: input.mrIid,
     projectKey: input.projectKey,
-    mrIid: input.mrIid,
     reviewRunId: input.reviewRunId,
+    inlineDrafts: plan.inlineDrafts.map((draft) => ({
+      path: draft.comment.file,
+      body: draft.markedBody,
+      anchor: draft.anchor,
+      logLabel: `${draft.comment.file}:${draft.comment.line}`,
+    })),
+    summaryBody: plan.markedSummaryBody,
+    diffRefs: plan.diffRefs,
+    classifyDraft: (body) => {
+      if (isCurrentRunDraft(body, input.reviewRunId)) {
+        return 'current_run'
+      }
+      return isMendDraft(body) ? 'mend_other_run' : 'foreign'
+    },
+    matchSummaryNote: (notes) => findPublishedSummaryForRun(notes, input.reviewRunId),
   })
   const postedInlineComments: PostedInlineComment[] = plan.inlineComments.map(() =>
     emptyPostedThreadRef(),
@@ -219,55 +109,16 @@ export const executePostPlan = async (params: {
   const threadedFindings: ThreadedFinding[] = []
   const threadedInlineComments: ThreadedInlineComment[] = []
 
-  for (const draft of plan.inlineDrafts) {
-    console.log(`[post] creating draft note on ${draft.comment.file}:${draft.comment.line}`)
-    const result = await createDraftNoteWithReconciliation({
-      gitlab,
-      mrIid: input.mrIid,
-      note: draft.markedBody,
-      position: draft.position,
-    })
-    if (result.reconciled) {
-      console.warn(
-        `[post] re-used existing draft note on ${draft.comment.file}:${draft.comment.line} after ambiguous create failure`,
-      )
-    }
-  }
-
-  if (plan.inlineDrafts.length > 0) {
-    console.log(`[post] bulk publishing ${plan.inlineDrafts.length} inline draft notes`)
-    const publishResult = await bulkPublishDraftsWithReconciliation({
-      gitlab,
-      mrIid: input.mrIid,
-      reviewRunId: input.reviewRunId,
-    })
-    if (publishResult.reconciled) {
-      console.warn(
-        '[post] bulk publish returned an error but current-run inline drafts appear published; continuing',
-      )
-    }
-  }
-
-  console.log('[post] creating summary note')
-  const summaryNote = await createMrNoteWithReconciliation({
-    gitlab,
-    mrIid: input.mrIid,
-    body: plan.markedSummaryBody,
-    reviewRunId: input.reviewRunId,
-  })
-  let summaryNoteId = summaryNote.id
-  if (summaryNote.reconciled) {
-    console.warn('[post] re-used existing summary note after ambiguous create failure')
-  }
+  let summaryNoteId = publishResult.summaryNoteId
 
   try {
-    const discussions = await gitlab.listMrDiscussions(input.mrIid)
-    const persisted = await persistPublishedGitLabDiscussions({
+    const threads = await provider.listThreads(input.mrIid)
+    const persisted = await persistPublishedThreads({
       project,
       projectKey: input.projectKey,
       mrIid: input.mrIid,
       reviewRunId: input.reviewRunId,
-      discussions,
+      threads,
     })
     summaryNoteId = persisted.summaryNoteId ?? summaryNoteId
     const persistedInlineByFingerprint = new Map(
@@ -294,7 +145,7 @@ export const executePostPlan = async (params: {
 
   for (const draft of plan.findingDiscussions) {
     const result = await createDiscussionWithReconciliation({
-      gitlab,
+      provider,
       mrIid: input.mrIid,
       body: draft.markedBody,
     })
@@ -304,19 +155,19 @@ export const executePostPlan = async (params: {
       )
     }
 
-    const firstNote = result.discussion.notes[0]
+    const firstNote = result.thread.messages[0]
     let postedThread = {
-      providerThreadId: result.discussion.id,
-      providerMessageId: firstNote ? `${firstNote.id}` : null,
+      providerThreadId: result.thread.id,
+      providerMessageId: firstNote ? firstNote.id : null,
     }
 
     try {
-      const persisted = await persistPublishedGitLabDiscussions({
+      const persisted = await persistPublishedThreads({
         project,
         projectKey: input.projectKey,
         mrIid: input.mrIid,
         reviewRunId: input.reviewRunId,
-        discussions: [result.discussion],
+        threads: [result.thread],
       })
       const persistedDiscussion = persisted.summaryFindings.find(
         (entry) => entry.findingFingerprint === draft.fingerprint,
@@ -383,7 +234,7 @@ export const executePostPlan = async (params: {
       `[post] resolving threads for ${input.resolutionVerdicts.length} resolution verdicts`,
     )
     resolutionStats = await executeThreadResolutions({
-      gitlab,
+      provider,
       mrIid: input.mrIid,
       reviewRunId: input.reviewRunId,
       resolutions: plan.threadResolutions,
@@ -399,7 +250,9 @@ export const executePostPlan = async (params: {
     postedFindings,
     threadedFindings,
     threadedInlineComments,
-    ...draftRecovery,
+    preExistingDraftCount: publishResult.preExistingDraftCount,
+    recoveredDraftCount: publishResult.recoveredDraftCount,
+    draftRecoveryAction: publishResult.draftRecoveryAction,
     summaryNoteId,
     persistedFindingCount: persistedFindings.length,
     resolutionStats,

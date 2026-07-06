@@ -1,4 +1,5 @@
 import type { ProjectConfig } from '@/config'
+import { ProviderApiError } from '@/integrations/provider/error'
 import { toErrorMessage } from '@/lib/errors'
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504])
@@ -95,7 +96,11 @@ export const gitlabApi = async (
 
     if (!RETRYABLE_STATUSES.has(res.status) || attempt === maxRetries) {
       const body = await res.text()
-      throw new Error(`GitLab API ${res.status} ${method} ${path}: ${body}`)
+      throw new ProviderApiError({
+        message: `GitLab API ${res.status} ${method} ${path}: ${body}`,
+        status: res.status,
+        method,
+      })
     }
 
     const delay = retryDelay(attempt + 1, res)
@@ -142,7 +147,11 @@ export const gitlabApiGlobal = async (
 
     if (!RETRYABLE_STATUSES.has(res.status) || attempt === maxRetries) {
       const body = await res.text()
-      throw new Error(`GitLab API ${res.status} ${method} ${path}: ${body}`)
+      throw new ProviderApiError({
+        message: `GitLab API ${res.status} ${method} ${path}: ${body}`,
+        status: res.status,
+        method,
+      })
     }
 
     const delay = retryDelay(attempt + 1, res)

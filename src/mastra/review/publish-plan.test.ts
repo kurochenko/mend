@@ -1,19 +1,16 @@
 import { describe, expect, it } from 'bun:test'
 import { parseDiff } from '@/lib/diff'
-import {
-  buildPostPlan,
-  dedupeInlineComments,
-  type PostPlanDiffRefs,
-} from '@/mastra/review/publish-plan'
+import { buildPostPlan, dedupeInlineComments } from '@/mastra/review/publish-plan'
+import type { DiffRefs } from '@/integrations/provider/types'
 import type { PostStepInput } from '@/mastra/review/run-result'
 import type { ReviewFinding, ReviewInlineComment } from '@/mastra/review/schema'
 import { buildInlineThreadFingerprint } from '@/lib/review-threads'
 import { formatCommentBody } from '@/mastra/review/formatting'
 
-const diffRefs: PostPlanDiffRefs = {
-  base_sha: 'base',
-  start_sha: 'start',
-  head_sha: 'head',
+const diffRefs: DiffRefs = {
+  baseSha: 'base',
+  startSha: 'start',
+  headSha: 'head',
 }
 
 const baseDiagnostics = {
@@ -276,7 +273,7 @@ describe('buildPostPlan', () => {
       existingPublishedThreads: [],
     })
 
-    expect(updateBasePlan.inlineDrafts[0]?.position.old_line).toBe(20)
-    expect(mrBasePlan.inlineDrafts[0]?.position.old_line).toBe(10)
+    expect(updateBasePlan.inlineDrafts[0]?.anchor.old_line).toBe(20)
+    expect(mrBasePlan.inlineDrafts[0]?.anchor.old_line).toBe(10)
   })
 })

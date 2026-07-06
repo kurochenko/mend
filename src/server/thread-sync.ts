@@ -13,11 +13,11 @@ import {
   type ReviewMessageRecord,
   type ReviewThreadRecord,
 } from '@/db/review-threads'
-import type { Discussion, DiscussionNote } from '@/integrations/gitlab/discussions'
+import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
 import {
-  collectPersistableGitLabDiscussions,
+  collectPersistableThreads,
   deriveThreadContext,
-  getDiscussionStatus,
+  getThreadStatus,
 } from '@/mastra/review/thread-context'
 import { parseProviderTimestamp } from '@/lib/timestamps'
 
@@ -42,7 +42,7 @@ const defaultDependencies: ThreadSyncDependencies = {
 }
 
 export const buildResolvedFindingStateUpdate = (
-  reply: DiscussionNote,
+  reply: ProviderThreadMessage,
 ): {
   state: 'resolved'
   decisionReason: string
@@ -55,11 +55,11 @@ export const buildResolvedFindingStateUpdate = (
   decidedByName: reply.author.username,
 })
 
-export const upsertGitLabDiscussionThread = async (params: {
+export const upsertProviderThread = async (params: {
   project: ProjectConfig
   projectKey: string
   mrIid: number
-  discussion: Discussion
+  thread: ProviderThread
   latestReviewRunId?: string | null
   existingThread?: ReviewThreadRecord | null
   dependencies?: Partial<ThreadSyncDependencies>
@@ -69,13 +69,13 @@ export const upsertGitLabDiscussionThread = async (params: {
     params.existingThread ??
     (await dependencies.getReviewThreadByProviderThreadId({
       provider: 'gitlab',
-      providerThreadId: params.discussion.id,
+      providerThreadId: params.thread.id,
     }))
 
-  const firstNote = params.discussion.notes[0]
-  const context = deriveThreadContext(params.discussion)
+  const firstNote = params.thread.messages[0]
+  const context = deriveThreadContext(params.thread)
   const reviewRunId = firstNote
-    ? (collectPersistableGitLabDiscussions([params.discussion])[0]?.firstNoteRunId ?? null)
+    ? (collectPersistableThreads([params.thread])[0]?.firstNoteRunId ?? null)
     : null
 
   return await dependencies.upsertReviewThread({
@@ -90,9 +90,9 @@ export const upsertGitLabDiscussionThread = async (params: {
     line: context.line,
     findingFingerprint: context.findingFingerprint,
     status: firstNote?.resolved ? 'resolved' : 'open',
-    providerThreadId: existing?.providerThreadId ?? params.discussion.id,
+    providerThreadId: existing?.providerThreadId ?? params.thread.id,
     providerUrl: firstNote?.url ?? existing?.providerUrl ?? null,
-    rawProviderData: params.discussion.raw,
+    rawProviderData: params.thread.raw,
     providerCreatedAt: parseProviderTimestamp(firstNote?.createdAt),
     providerUpdatedAt: parseProviderTimestamp(firstNote?.updatedAt),
   })
@@ -101,7 +101,7 @@ export const upsertGitLabDiscussionThread = async (params: {
 export const persistOutboundReply = async (params: {
   thread: ReviewThreadRecord
   reviewRunId: string | null
-  reply: DiscussionNote
+  reply: ProviderThreadMessage
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<ReviewMessageRecord> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
@@ -114,7 +114,7 @@ export const persistOutboundReply = async (params: {
     authorName: params.reply.author.username,
     direction: 'outbound',
     body: params.reply.body,
-    providerMessageId: `${params.reply.id}`,
+    providerMessageId: params.reply.id,
     providerParentMessageId: null,
     providerUrl: params.reply.url ?? null,
     rawProviderData: params.reply.raw,
@@ -123,17 +123,17 @@ export const persistOutboundReply = async (params: {
   })
 }
 
-export const persistGitLabReplyLocally = async (params: {
-  discussionId: string
+export const persistProviderReplyLocally = async (params: {
+  threadId: string
   reviewRunId: string | null
-  reply: DiscussionNote
+  reply: ProviderThreadMessage
   markResolved: boolean
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   const thread = await dependencies.getReviewThreadByProviderThreadId({
     provider: 'gitlab',
-    providerThreadId: params.discussionId,
+    providerThreadId: params.threadId,
   })
 
   if (!thread) {
@@ -153,13 +153,13 @@ export const persistGitLabReplyLocally = async (params: {
 
   await dependencies.updateReviewThreadStatusByProviderThreadId({
     provider: 'gitlab',
-    providerThreadId: params.discussionId,
+    providerThreadId: params.threadId,
     status: 'resolved',
   })
 
   const finding = await dependencies.getReviewFindingByProviderThreadId({
     provider: 'gitlab',
-    providerThreadId: params.discussionId,
+    providerThreadId: params.threadId,
   })
 
   if (!finding) {
@@ -172,7 +172,7 @@ export const persistGitLabReplyLocally = async (params: {
   })
 }
 
-export const markGitLabThreadResolved = async (params: {
+export const markProviderThreadResolved = async (params: {
   providerThreadId: string
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<void> => {
@@ -184,12 +184,12 @@ export const markGitLabThreadResolved = async (params: {
   })
 }
 
-export const persistPublishedGitLabDiscussions = async (params: {
+export const persistPublishedThreads = async (params: {
   project: ProjectConfig
   projectKey: string
   mrIid: number
   reviewRunId: string
-  discussions: Discussion[]
+  threads: ProviderThread[]
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<{
   summaryNoteId: number | null
@@ -205,7 +205,7 @@ export const persistPublishedGitLabDiscussions = async (params: {
   }>
 }> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
-  const persistable = collectPersistableGitLabDiscussions(params.discussions, params.reviewRunId)
+  const persistable = collectPersistableThreads(params.threads, params.reviewRunId)
   let summaryNoteId: number | null = null
   const inlineComments: Array<{
     findingFingerprint: string
@@ -230,10 +230,10 @@ export const persistPublishedGitLabDiscussions = async (params: {
       path: entry.context.path,
       line: entry.context.line,
       findingFingerprint: entry.context.findingFingerprint,
-      status: getDiscussionStatus(entry.discussion),
-      providerThreadId: entry.discussion.id,
+      status: getThreadStatus(entry.thread),
+      providerThreadId: entry.thread.id,
       providerUrl: entry.firstNote.url ?? null,
-      rawProviderData: entry.discussion.raw,
+      rawProviderData: entry.thread.raw,
       providerCreatedAt: parseProviderTimestamp(entry.firstNote.createdAt),
       providerUpdatedAt: parseProviderTimestamp(entry.firstNote.updatedAt),
     })
@@ -247,7 +247,7 @@ export const persistPublishedGitLabDiscussions = async (params: {
       authorName: entry.firstNote.author.username,
       direction: 'outbound',
       body: entry.firstNote.body,
-      providerMessageId: `${entry.firstNote.id}`,
+      providerMessageId: entry.firstNote.id,
       providerUrl: entry.firstNote.url ?? null,
       rawProviderData: entry.firstNote.raw,
       providerCreatedAt: parseProviderTimestamp(entry.firstNote.createdAt),
@@ -255,15 +255,15 @@ export const persistPublishedGitLabDiscussions = async (params: {
     })
 
     if (entry.context.threadKind === 'summary_note') {
-      summaryNoteId = entry.firstNote.id
+      summaryNoteId = Number(entry.firstNote.id)
       continue
     }
 
     if (entry.context.threadKind === 'inline' && entry.context.findingFingerprint) {
       inlineComments.push({
         findingFingerprint: entry.context.findingFingerprint,
-        providerThreadId: entry.discussion.id,
-        providerMessageId: `${entry.firstNote.id}`,
+        providerThreadId: entry.thread.id,
+        providerMessageId: entry.firstNote.id,
       })
       continue
     }
@@ -271,8 +271,8 @@ export const persistPublishedGitLabDiscussions = async (params: {
     if (entry.context.threadKind === 'summary_finding' && entry.context.findingFingerprint) {
       summaryFindings.push({
         findingFingerprint: entry.context.findingFingerprint,
-        providerThreadId: entry.discussion.id,
-        providerMessageId: `${entry.firstNote.id}`,
+        providerThreadId: entry.thread.id,
+        providerMessageId: entry.firstNote.id,
       })
     }
   }

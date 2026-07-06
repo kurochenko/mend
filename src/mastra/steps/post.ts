@@ -1,8 +1,7 @@
 import { createStep } from '@mastra/core/workflows'
 import { getProject } from '@/config'
 import { countPostedSuccessfulReviewRuns } from '@/db/review-runs'
-import { createGitLabClient } from '@/integrations/gitlab/client'
-import { fetchMrChangedFiles, fetchMrDiffRefs } from '@/integrations/gitlab/mr'
+import { createReviewProvider } from '@/integrations/provider/client'
 import { assertSafeGitRef, execGit } from '@/lib/exec'
 import { parseDiff } from '@/lib/diff'
 import {
@@ -30,25 +29,24 @@ export const postStep = createStep({
   outputSchema: postStepOutputSchema,
   execute: async ({ inputData }) => {
     const project = getProject(inputData.projectKey)
-    const gitlab = createGitLabClient(project)
+    const provider = createReviewProvider(project)
 
     console.log(`[post] fetching diff refs for ${inputData.projectKey} MR !${inputData.mrIid}`)
-    const [{ diffRefs }, { files: mrChangedFiles }, reviewRunCount, existingPublishedThreads] =
-      await Promise.all([
-        fetchMrDiffRefs(project, inputData.mrIid),
-        fetchMrChangedFiles(project, inputData.mrIid),
-        countPostedSuccessfulReviewRuns({
-          projectKey: inputData.projectKey,
-          mrIid: inputData.mrIid,
-        }),
-        loadPublishedReviewThreadsForMr({
-          project,
-          projectKey: inputData.projectKey,
-          mrIid: inputData.mrIid,
-        }),
-      ])
+    const [diffRefs, mrChangedFiles, reviewRunCount, existingPublishedThreads] = await Promise.all([
+      provider.fetchDiffRefs(inputData.mrIid),
+      provider.fetchChangedFiles(inputData.mrIid),
+      countPostedSuccessfulReviewRuns({
+        projectKey: inputData.projectKey,
+        mrIid: inputData.mrIid,
+      }),
+      loadPublishedReviewThreadsForMr({
+        project,
+        projectKey: inputData.projectKey,
+        mrIid: inputData.mrIid,
+      }),
+    ])
 
-    const mrDiffBase = assertSafeGitRef(diffRefs.base_sha, 'MR diff base ref')
+    const mrDiffBase = assertSafeGitRef(diffRefs.baseSha, 'MR diff base ref')
     const diffOutput = await execGit(['diff', `${mrDiffBase}...HEAD`], inputData.worktreePath)
     const diffMap = parseDiff(diffOutput)
     const previousRunId = inputData.previousRunId
@@ -105,7 +103,7 @@ export const postStep = createStep({
           persistedFindingCount: 0,
           resolutionStats: emptyResolutionStats(),
         }
-      : await executePostPlan({ plan, project, gitlab })
+      : await executePostPlan({ plan, project, provider })
 
     if (inputData.featureFlags.dryRun) {
       renderPostPlanDryRun(plan)

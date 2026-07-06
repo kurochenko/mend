@@ -18,9 +18,7 @@ const mockCreateReviewMemoryEntry = mock<(...args: unknown[]) => Promise<unknown
   Promise.resolve({ id: 'memory-resolved-thread' }),
 )
 const mockArchiveActiveThreadResolvedMemoryForThread = mock(() => Promise.resolve())
-const mockListMrDiscussions = mock<(...args: unknown[]) => Promise<unknown[]>>(() =>
-  Promise.resolve([]),
-)
+const mockListThreads = mock<(...args: unknown[]) => Promise<unknown[]>>(() => Promise.resolve([]))
 
 mock.module('@/db/review-runs', () => ({
   getReviewRun: mockGetReviewRun,
@@ -40,26 +38,59 @@ mock.module('@/db/review-memory', () => ({
   THREAD_RESOLVED_MEMORY_KIND: 'thread_resolved',
 }))
 
-mock.module('@/integrations/gitlab/discussions', () => ({
-  listMrDiscussions: mockListMrDiscussions,
+mock.module('@/integrations/provider/client', () => ({
+  createReviewProvider: mock(() => ({
+    kind: 'gitlab',
+    fetchCurrentUser: mock(async () => ({ id: 1, username: 'mend-bot' })),
+    fetchChangeRequest: mock(async () => {
+      throw new Error('unused')
+    }),
+    fetchDiffRefs: mock(async () => ({ baseSha: 'base', headSha: 'head', startSha: 'start' })),
+    fetchChangedFiles: mock(async () => []),
+    listNotes: mock(async () => []),
+    createNote: mock(async () => ({ id: 1, body: '', author: null })),
+    updateNote: mock(async () => ({ id: 1, body: '', author: null })),
+    deleteNote: mock(async () => {}),
+    listThreads: mockListThreads,
+    getThread: mock(async () => ({ id: 'thread-1', isThread: true, messages: [], raw: {} })),
+    createThread: mock(async () => ({ id: 'thread-1', isThread: true, messages: [], raw: {} })),
+    replyToThread: mock(async () => ({
+      id: '1',
+      body: '',
+      author: { id: 1, username: 'mend-bot', raw: {} },
+      resolvable: false,
+      position: null,
+      raw: {},
+    })),
+    resolveThread: mock(async () => {}),
+    addNoteReaction: mock(async () => {}),
+    addThreadMessageReaction: mock(async () => {}),
+    publishReviewBatch: mock(async () => ({
+      preExistingDraftCount: 0,
+      recoveredDraftCount: 0,
+      draftRecoveryAction: 'none' as const,
+      summaryNoteId: 1,
+      summaryReconciled: false,
+    })),
+  })),
 }))
 
 const { buildPreviousReviewContext, loadPublishedReviewThreadsForMr } = await import(
   '@/mastra/review/previous-context'
 )
 
-const makeDiscussion = (params: {
+const makeThread = (params: {
   id: string
   fingerprint: string
   resolved: boolean
   humanReply?: { id: number; username: string; body: string; system?: boolean }
 }) => ({
   id: params.id,
-  individual_note: false,
+  isThread: true,
   raw: {},
-  notes: [
+  messages: [
     {
-      id: 100,
+      id: '100',
       body: `Original finding\n\n<!-- mend:summary-finding ${JSON.stringify({
         fingerprint: params.fingerprint,
         previousFindingId: params.fingerprint,
@@ -68,16 +99,18 @@ const makeDiscussion = (params: {
       resolvable: true,
       resolved: params.resolved,
       system: false,
+      position: null,
       raw: {},
     },
     ...(params.humanReply
       ? [
           {
-            id: params.humanReply.id,
+            id: `${params.humanReply.id}`,
             body: params.humanReply.body,
             author: { id: 2, username: params.humanReply.username, raw: {} },
             resolvable: false,
             system: params.humanReply.system ?? false,
+            position: null,
             raw: {},
           },
         ]
@@ -95,7 +128,7 @@ describe('buildPreviousReviewContext', () => {
     mockUpsertReviewMessage.mockReset()
     mockCreateReviewMemoryEntry.mockReset()
     mockArchiveActiveThreadResolvedMemoryForThread.mockReset()
-    mockListMrDiscussions.mockReset()
+    mockListThreads.mockReset()
 
     mockListReviewThreadsForRun.mockImplementation(() => Promise.resolve([]))
     mockListReviewThreadsForMr.mockImplementation(() => Promise.resolve([]))
@@ -106,7 +139,7 @@ describe('buildPreviousReviewContext', () => {
       Promise.resolve({ id: 'memory-resolved-thread' }),
     )
     mockArchiveActiveThreadResolvedMemoryForThread.mockImplementation(() => Promise.resolve())
-    mockListMrDiscussions.mockImplementation(() => Promise.resolve([]))
+    mockListThreads.mockImplementation(() => Promise.resolve([]))
   })
 
   test('merges threaded out-of-scope findings and inline comments into previous context', async () => {
@@ -343,14 +376,14 @@ describe('buildPreviousReviewContext', () => {
         },
       ]),
     )
-    mockListMrDiscussions.mockImplementation(() =>
+    mockListThreads.mockImplementation(() =>
       Promise.resolve([
-        makeDiscussion({
+        makeThread({
           id: 'discussion-live',
           fingerprint: 'finding-live',
           resolved: true,
         }),
-        makeDiscussion({
+        makeThread({
           id: 'discussion-archived',
           fingerprint: 'finding-archived',
           resolved: false,
@@ -386,9 +419,9 @@ describe('buildPreviousReviewContext', () => {
         },
       ]),
     )
-    mockListMrDiscussions.mockImplementation(() =>
+    mockListThreads.mockImplementation(() =>
       Promise.resolve([
-        makeDiscussion({
+        makeThread({
           id: 'discussion-1',
           fingerprint: 'finding-1',
           resolved: true,
@@ -426,7 +459,7 @@ describe('buildPreviousReviewContext', () => {
         createdByName: 'reviewer',
         metadata: expect.objectContaining({
           humanReplyBody: 'This is intentional.',
-          humanReplyNoteId: 321,
+          humanReplyNoteId: '321',
         }),
       }),
     )
@@ -447,9 +480,9 @@ describe('buildPreviousReviewContext', () => {
         },
       ]),
     )
-    mockListMrDiscussions.mockImplementation(() =>
+    mockListThreads.mockImplementation(() =>
       Promise.resolve([
-        makeDiscussion({
+        makeThread({
           id: 'discussion-1',
           fingerprint: 'finding-1',
           resolved: true,
@@ -489,9 +522,9 @@ describe('buildPreviousReviewContext', () => {
         },
       ]),
     )
-    mockListMrDiscussions.mockImplementation(() =>
+    mockListThreads.mockImplementation(() =>
       Promise.resolve([
-        makeDiscussion({
+        makeThread({
           id: 'discussion-1',
           fingerprint: 'finding-1',
           resolved: false,
@@ -531,9 +564,9 @@ describe('buildPreviousReviewContext', () => {
         },
       ]),
     )
-    mockListMrDiscussions.mockImplementation(() =>
+    mockListThreads.mockImplementation(() =>
       Promise.resolve([
-        makeDiscussion({
+        makeThread({
           id: 'discussion-1',
           fingerprint: 'finding-1',
           resolved: true,

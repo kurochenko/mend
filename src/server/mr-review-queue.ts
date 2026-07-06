@@ -14,8 +14,7 @@ import {
 } from '@/db/review-queue'
 import { updateReviewRunResult } from '@/db/review-runs'
 import { getServiceRuntimeMode } from '@/db/service-runtime'
-import { createGitLabClient, type GitLabClient } from '@/integrations/gitlab/client'
-import { fetchMr } from '@/integrations/gitlab/mr'
+import { createReviewProvider, type ReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
 import { asMrReviewRequestEvent, type MrReviewRequestEvent } from '@/lib/review-events'
 import {
@@ -42,11 +41,10 @@ interface ReviewQueueDependencies {
   setRunningCommitSha: typeof setRunningCommitSha
   upsertPendingReviewRequest: typeof upsertPendingReviewRequest
   getServiceRuntimeMode: typeof getServiceRuntimeMode
-  fetchMr: typeof fetchMr
+  createReviewProvider: typeof createReviewProvider
   hasSuccessfulRunForSha: typeof hasSuccessfulRunForSha
   getLatestSuccessfulRun: typeof getLatestSuccessfulRun
   executeMrReview: typeof executeMrReview
-  createGitLabClient: typeof createGitLabClient
   syncStatusNote: typeof syncStatusNote
   queueAutomaticFixBatch: typeof queueAutomaticFixBatch
   updateReviewRunResult: typeof updateReviewRunResult
@@ -63,32 +61,31 @@ const defaultDependencies: ReviewQueueDependencies = {
   setRunningCommitSha,
   upsertPendingReviewRequest,
   getServiceRuntimeMode,
-  fetchMr,
+  createReviewProvider,
   hasSuccessfulRunForSha,
   getLatestSuccessfulRun,
   executeMrReview,
-  createGitLabClient,
   syncStatusNote,
   queueAutomaticFixBatch,
   updateReviewRunResult,
 }
 
 const createMrNoteOnceByBody = async (params: {
-  gitlab: GitLabClient
+  provider: ReviewProvider
   mrIid: number
   body: string
 }): Promise<void> => {
-  const notes = await params.gitlab.listMrNotes(params.mrIid)
+  const notes = await params.provider.listNotes(params.mrIid)
   if (notes.some((note) => note.body === params.body)) {
     return
   }
 
-  await params.gitlab.createMrNote(params.mrIid, params.body)
+  await params.provider.createNote(params.mrIid, params.body)
 }
 
 const queueAutomaticFixAfterReview = async (params: {
   project: ProjectConfig
-  gitlab: GitLabClient
+  provider: ReviewProvider
   output: PostStepOutput
   dependencies: ReviewQueueDependencies
 }): Promise<AutomaticFixBatchOutcome['status'] | null> => {
@@ -114,7 +111,7 @@ const queueAutomaticFixAfterReview = async (params: {
 
   if (automaticOutcome.status === 'loop_limit') {
     await createMrNoteOnceByBody({
-      gitlab: params.gitlab,
+      provider: params.provider,
       mrIid: params.output.mrIid,
       body: automaticLoopLimitBody(params.output.projectKey, params.output.mrIid, automaticOutcome),
     })
@@ -176,10 +173,10 @@ const queueMessageForRecord = (
 
 const updateQueuedStatusNote = async (params: {
   record: ReviewQueueRecord
-  gitlab: GitLabClient
+  provider: ReviewProvider
   dependencies: ReviewQueueDependencies
 }): Promise<void> => {
-  const { record, gitlab, dependencies } = params
+  const { record, provider, dependencies } = params
   const event = asMrReviewRequestEvent(record.runningEvent ?? record.pendingEvent)
   if (!event) {
     return
@@ -195,7 +192,7 @@ const updateQueuedStatusNote = async (params: {
       pendingSha: record.pendingCommitSha ?? undefined,
       message: queueState.message,
     },
-    dependencies: { gitlab },
+    dependencies: { provider },
   })
 }
 
@@ -227,16 +224,16 @@ const runQueuedJob = async (params: {
   mastra: Mastra
   project: ProjectConfig
   job: NonNullable<Awaited<ReturnType<typeof claimPendingReviewJob>>>
-  gitlab: GitLabClient
+  provider: ReviewProvider
   dependencies: ReviewQueueDependencies
 }): Promise<void> => {
-  const { mastra, job, gitlab, dependencies } = params
+  const { mastra, job, provider, dependencies } = params
   let statusReviewMode: 'initial' | 'update' = 'initial'
   let statusPreviousReviewedSha: string | null = null
   let statusRunningSha: string | undefined
 
   try {
-    const commitSha = job.commitSha ?? (await dependencies.fetchMr(params.project, job.mrIid)).sha
+    const commitSha = job.commitSha ?? (await provider.fetchChangeRequest(job.mrIid)).sha
     statusRunningSha = commitSha
     await dependencies.setRunningCommitSha(job.projectKey, job.mrIid, commitSha)
 
@@ -253,7 +250,7 @@ const runQueuedJob = async (params: {
           runningSha: commitSha,
           message: 'Latest SHA already reviewed successfully; skipping duplicate event',
         },
-        dependencies: { gitlab },
+        dependencies: { provider },
       })
       return
     }
@@ -280,7 +277,7 @@ const runQueuedJob = async (params: {
         previousReviewedSha,
         message: 'Review is in progress',
       },
-      dependencies: { gitlab },
+      dependencies: { provider },
     })
 
     const execution = await dependencies.executeMrReview({
@@ -307,7 +304,7 @@ const runQueuedJob = async (params: {
       if (execution.output) {
         const automaticFixBatchStatus = await queueAutomaticFixAfterReview({
           project: params.project,
-          gitlab,
+          provider,
           output: execution.output,
           dependencies,
         })
@@ -329,7 +326,7 @@ const runQueuedJob = async (params: {
           runId: execution.reviewRunId,
           message: `Completed with assessment ${execution.output?.assessment ?? 'unknown'}`,
         },
-        dependencies: { gitlab },
+        dependencies: { provider },
       })
       console.log(`[webhook] review completed for ${job.event.projectKey} MR !${job.event.mrIid}`)
       console.log(`[webhook] run id: ${execution.reviewRunId}`)
@@ -346,7 +343,7 @@ const runQueuedJob = async (params: {
         runId: execution.reviewRunId,
         message: `Workflow status: ${execution.workflowResult.status}`,
       },
-      dependencies: { gitlab },
+      dependencies: { provider },
     })
     console.error(
       `[webhook] review ${execution.workflowResult.status} for ${job.event.projectKey} MR !${job.event.mrIid}`,
@@ -364,7 +361,7 @@ const runQueuedJob = async (params: {
           previousReviewedSha: statusPreviousReviewedSha,
           message: 'Source branch no longer exists on remote; skipping review',
         },
-        dependencies: { gitlab },
+        dependencies: { provider },
       })
       console.warn(
         `[webhook] review skipped for ${job.event.projectKey} MR !${job.event.mrIid}: ${message}`,
@@ -381,7 +378,7 @@ const runQueuedJob = async (params: {
         previousReviewedSha: statusPreviousReviewedSha,
         message,
       },
-      dependencies: { gitlab },
+      dependencies: { provider },
     })
     console.error(
       `[webhook] review failed for ${job.event.projectKey} MR !${job.event.mrIid}:`,
@@ -396,7 +393,7 @@ const processQueueLoop = async (
   key: string,
   dependencies: ReviewQueueDependencies,
 ): Promise<void> => {
-  const gitlab = dependencies.createGitLabClient(project)
+  const provider = dependencies.createReviewProvider(project)
 
   try {
     for (;;) {
@@ -416,7 +413,7 @@ const processQueueLoop = async (
         return
       }
 
-      await runQueuedJob({ mastra, project, job, gitlab, dependencies })
+      await runQueuedJob({ mastra, project, job, provider, dependencies })
 
       const remaining = await withMrLock(key, async () => {
         const finished = await dependencies.finishRunningReview(project.key, job.mrIid)
@@ -434,7 +431,7 @@ const processQueueLoop = async (
       })
 
       if (remaining?.pendingEvent && (await isDraining(dependencies))) {
-        await updateQueuedStatusNote({ record: remaining, gitlab, dependencies })
+        await updateQueuedStatusNote({ record: remaining, provider, dependencies })
         return
       }
 
@@ -512,7 +509,7 @@ export const enqueueMrReview = async (params: {
 }): Promise<void> => {
   const { mastra, project, payload, event } = params
   const dependencies = { ...defaultDependencies, ...params.dependencies }
-  const gitlab = dependencies.createGitLabClient(project)
+  const provider = dependencies.createReviewProvider(project)
   const key = mrLockKey(event.projectKey, event.mrIid)
 
   const result: { ignored: true } | { ignored: false; record: ReviewQueueRecord } =
@@ -533,7 +530,7 @@ export const enqueueMrReview = async (params: {
           queuedRecord
       }
 
-      await updateQueuedStatusNote({ record: queuedRecord, gitlab, dependencies })
+      await updateQueuedStatusNote({ record: queuedRecord, provider, dependencies })
 
       return {
         ignored: false,
