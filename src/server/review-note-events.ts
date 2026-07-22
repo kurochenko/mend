@@ -433,7 +433,7 @@ export const processReviewNoteEvent = async (params: {
   let discussionId: string
   let discussion: ProviderThread | null = null
   let existingThread: ReviewThreadRecord | null = null
-  let threadMessages: ReviewMessageRecord[] = []
+  let threadMessages: ReviewMessageRecord[]
 
   if (webhookDiscussionId) {
     existingThread = await getReviewThreadByProviderThreadId({
