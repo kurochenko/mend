@@ -2,7 +2,12 @@
 
 Autonomous merge-request review for GitLab. Mend listens for webhooks, checks out the MR in an isolated worktree, reviews it with the coding agent of your choice, and posts structured findings back as draft notes — with a persistent status note tracking progress.
 
-It runs on your own machine against your own GitLab projects, and it works with **subscription auth** (Claude Pro/Max via Pi, ChatGPT via Codex CLI) — no API keys required.
+It runs on your own machine against your own projects, and it works with **subscription auth** (Claude Pro/Max via Pi, ChatGPT via Codex CLI) — no API keys required.
+
+## Platform support
+
+- **GitLab** — supported and running in production (gitlab.com and self-hosted).
+- **GitHub** — under active development, not usable yet.
 
 ## How it works
 
@@ -14,47 +19,64 @@ GitLab webhook ──▶ queue ──▶ setup ──▶ review ──▶ post
 
 - **Queue** — per-MR deduplication, latest-wins; a SHA already reviewed successfully is skipped. A status note on the MR tracks `queued → running → completed`.
 - **Setup** — maintains a bare clone per project and creates a fresh worktree per review.
-- **Review** — a selectable coding-agent harness (`pi`, `codex`, `opencode`, or an `ensemble` of finders + verifiers + synthesizer) reads the diff and the code around it and produces structured findings. File inspection is enforced: files the agent skipped get a retry pass. An LLM intent classifier picks the review template (feature, refactor, fix, …).
+- **Review** — a selectable coding-agent harness (`pi`, `codex`, `opencode`, or an `ensemble` of finders + verifiers + synthesizer) reads the diff and the code around it and produces structured findings. File inspection is enforced: files the agent skipped get a retry pass. An LLM intent classifier picks the review template.
 - **Post** — findings become GitLab draft notes (inline where the diff allows), bulk-published at the end. Update reviews diff against the last reviewed SHA and resolve addressed threads. Replies to review threads are processed, and triage commands let you accept or dismiss findings.
 
 There is also an evals dashboard (`/evals`) over review run history, and a replay CLI to re-run recorded webhooks as benchmarks.
 
-## Requirements
+## Quick start (Docker)
 
-- [Bun](https://bun.sh) ≥ 1.3.9
-- Docker (Postgres 16 + pgvector via `docker-compose.yml`)
-- At least one review harness: [Pi](https://github.com/badlogic/pi-mono), [Codex CLI](https://github.com/openai/codex), or [OpenCode](https://github.com/sst/opencode)
+Requires Docker with the compose plugin.
 
-## Setup
+```bash
+git clone https://github.com/kurochenko/mend.git && cd mend
+cp .env.example .env          # secrets referenced from mend.yml
+cp mend.example.yml mend.yml  # project configuration — edit this
+docker compose up -d --build mend
+curl localhost:3147/health
+```
+
+This starts Postgres (persistent `pgdata` volume) and the Mend service on port 3147, with migrations applied on start. The image ships `git` plus the Codex, OpenCode, and Pi CLIs. Config files stay on your host — edit `mend.yml` or `.env`, then `docker compose restart mend`. Clones, agent sessions, and harness logins live in named volumes, so they survive rebuilds.
+
+To clone your projects over SSH, uncomment the `~/.ssh` mount in `docker-compose.yml`; alternatively use an HTTPS `repo_url` with an embedded token.
+
+## Run from source
+
+Requires [Bun](https://bun.sh) ≥ 1.3.9 and Docker (for Postgres).
 
 ```bash
 bun install
 docker compose up -d postgres
-cp .env.example .env          # server + per-project secrets
-cp mend.example.yml mend.yml  # project configuration
+cp .env.example .env
+cp mend.example.yml mend.yml
 bun run db:migrate
 bun run dev
 ```
-
-Then wire up a project:
-
-1. **Configure the project** in `mend.yml`: GitLab URL, API token, webhook secret, project id, repo URL. Secrets are referenced as `${VAR}` and resolved from `.env`.
-2. **Expose the webhook endpoint.** For a quick start, `bun run tunnel:webhooks:quick` opens an ad-hoc Cloudflare tunnel to your local instance.
-3. **Add a GitLab webhook** pointing at `https://<your-host>/webhooks/gitlab/<project-key>` with merge request events and note (comment) events enabled, using the secret from your config.
-
-Open an MR (or mark one ready) and Mend reviews it.
 
 ## Auth: subscriptions or API keys
 
 Harnesses bring their own auth — Mend doesn't need model API keys of its own:
 
-- **Pi** — run `pi`, then `/login` for subscription auth (Claude Pro/Max), or set provider API keys in the environment (`ANTHROPIC_API_KEY`, …).
-- **Codex CLI** — `codex login` with your ChatGPT account, or an OpenAI API key.
-- **OpenCode** — `opencode auth login` for its supported providers.
+- **API keys** — set them in `.env` (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …); the harnesses pick them up from the environment.
+- **Pi** (subscription: Claude Pro/Max and others) — run `pi`, then `/login`. In Docker: `docker compose exec mend pi`.
+- **Codex CLI** (subscription: ChatGPT) — run `codex login`. In Docker: `docker compose exec mend codex login`.
+- **OpenCode** — run `opencode auth login`. In Docker: `docker compose exec mend opencode auth login`.
+
+In Docker, logins persist in the `pi-auth` / `codex-auth` / `opencode-auth` volumes.
+
+## Connecting a project
+
+1. **Configure it in `mend.yml`** (see [mend.example.yml](mend.example.yml) for every option): GitLab URL, API token (scope `api`), webhook secret, project id, `repo_url`, and the trigger mode — `ready` reviews MRs when they leave draft state, `all` reviews every push. Secrets are referenced as `${VAR}` and resolved from `.env`.
+2. **Expose port 3147** to the internet however you like — reverse proxy, Tailscale funnel, or a Cloudflare tunnel (`bun run tunnel:webhooks:quick` starts an ad-hoc one for testing).
+3. **Add the webhook** in GitLab: *Project → Settings → Webhooks*.
+   - URL: `https://<your-host>/webhooks/gitlab/<project-key>` (the key from `mend.yml`, e.g. `backend`)
+   - Secret token: the value of your `webhook_secret`
+   - Triggers: **Merge request events** and **Comments** (note events)
+4. Open an MR (or mark one ready) — Mend queues a review, posts a status note, and publishes findings when done.
 
 ## Choosing harness and model
 
-Everything is per-project in `mend.yml`. See [mend.example.yml](mend.example.yml) for the full reference.
+Everything is per-project in `mend.yml`:
 
 ```yaml
 review:
@@ -68,6 +90,12 @@ review:
 ```
 
 The `ensemble` harness fans out cheap finder agents across review dimensions, adversarially verifies their findings, and synthesizes the survivors — each role with its own model and thinking level.
+
+## Customizing reviews per project
+
+- **Review templates** — `review.template.prompt: auto` lets the intent classifier pick among `feature`, `bugfix`, `style_refactor`, `security_sensitive`, and `mixed`; set a fixed id to pin one. An MR label like `ai-review:bugfix` (prefix configurable via `review.template.label_prefix`) overrides both.
+- **Project conventions** — the reviewer works inside a real worktree of the reviewed repository and is instructed to read its root `AGENTS.md` and cite violated rules. Keeping conventions there benefits your agents and your reviewer alike.
+- **Review memory** — accepted/dismissed findings and thread outcomes accumulate per project and feed future review prompts, so triage decisions teach the reviewer over time.
 
 ## Development
 

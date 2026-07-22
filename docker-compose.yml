@@ -1,4 +1,26 @@
 services:
+  mend:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3147:3147"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://mend:mend@postgres:5432/mend
+    volumes:
+      - ./mend.yml:/app/mend.yml:ro
+      - workspaces:/app/workspaces
+      - sessions:/app/sessions
+      - pi-auth:/root/.pi
+      - codex-auth:/root/.codex
+      - opencode-auth:/root/.local/share/opencode
+      # To clone project repos over SSH, mount a key read-only:
+      # - ~/.ssh:/root/.ssh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
   postgres:
     image: pgvector/pgvector:pg16
     ports:
@@ -7,6 +29,11 @@ services:
       POSTGRES_DB: mend
       POSTGRES_USER: mend
       POSTGRES_PASSWORD: mend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mend -d mend"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
     volumes:
       - pgdata:/var/lib/postgresql/data
   postgres-test:
@@ -22,3 +49,8 @@ services:
 
 volumes:
   pgdata:
+  workspaces:
+  sessions:
+  pi-auth:
+  codex-auth:
+  opencode-auth:
