@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: mend
+      POSTGRES_USER: mend
+      POSTGRES_PASSWORD: mend
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: mend_test
+      POSTGRES_USER: mend_test
+      POSTGRES_PASSWORD: mend_test
+    tmpfs:
+      - /var/lib/postgresql/data
+
+volumes:
+  pgdata:

@@ -1,0 +1,1 @@
+../../.skillbook/skills/excalidraw-mcp/SKILL.md

@@ -1,0 +1,2 @@
+CREATE TYPE "public"."review_run_status" AS ENUM('running', 'success', 'failed');--> statement-breakpoint
+ALTER TABLE "review_runs" ALTER COLUMN "status" SET DATA TYPE review_run_status USING status::review_run_status;

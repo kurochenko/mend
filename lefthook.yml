@@ -1,0 +1,53 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      glob: "*.{ts,js,mjs,cjs,json,jsonc}"
+      exclude:
+        - ".beads/**"
+        - ".codex/**"
+        - ".opencode/**"
+        - ".skillbook/**"
+        - "drizzle/**"
+        - "fixtures/**"
+        - "sessions/**"
+        - "workspaces/**"
+      stage_fixed: true
+      run: bunx biome format --write {staged_files}
+    - name: eslint
+      glob: "*.{ts,js,mjs,cjs}"
+      exclude:
+        - ".beads/**"
+        - ".codex/**"
+        - ".opencode/**"
+        - ".skillbook/**"
+        - "drizzle/**"
+        - "fixtures/**"
+        - "sessions/**"
+        - "workspaces/**"
+      run: bunx eslint {staged_files}
+    - name: oxlint
+      glob: "*.{ts,js,mjs,cjs}"
+      exclude:
+        - ".beads/**"
+        - ".codex/**"
+        - ".opencode/**"
+        - ".skillbook/**"
+        - "drizzle/**"
+        - "fixtures/**"
+        - "sessions/**"
+        - "workspaces/**"
+      run: bunx oxlint {staged_files}
+
+pre-push:
+  jobs:
+    - name: public-guard
+      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE && ./scripts/guard-public.sh
+    - name: check
+      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE && bun run check
+
+prepare-commit-msg:
+  jobs:
+    - name: beads
+      run: |
+        if command -v bd >/dev/null 2>&1; then bd hooks run prepare-commit-msg "$@"; fi

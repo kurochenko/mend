@@ -1,0 +1,1 @@
+ALTER TABLE "mr_status_notes" ALTER COLUMN "note_id" SET DATA TYPE bigint;

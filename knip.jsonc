@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  "entry": ["drizzle.config.ts", "tests/e2e/review-flow.e2e.ts"],
+  "project": [
+    "src/**/*.ts",
+    "tools/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "*.config.{ts,mjs,cjs,js}"
+  ],
+  "include": ["dependencies", "devDependencies", "unlisted", "binaries", "unresolved"],
+  "ignoreDependencies": ["mastra"],
+  "drizzle": {
+    "config": []
+  }
+}

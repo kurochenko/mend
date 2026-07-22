@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "review_memory_entries_source_message_idx" ON "review_memory_entries" USING btree ("source_message_id");

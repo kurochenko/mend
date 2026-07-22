@@ -1,0 +1,76 @@
+image: oven/bun:1.3.9
+
+variables:
+  GET_SOURCES_ATTEMPTS: "3"
+  BUN_INSTALL_CACHE_DIR: .bun-cache
+
+cache:
+  key:
+    files:
+      - bun.lock
+  paths:
+    - .bun-cache
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - when: never
+
+stages:
+  - validate
+
+lint:
+  stage: validate
+  script:
+    - bun install --frozen-lockfile
+    - bun run format
+    - bun run lint
+
+typecheck:
+  stage: validate
+  script:
+    - bun install --frozen-lockfile
+    - bun run typecheck
+
+test:
+  stage: validate
+  services:
+    - name: pgvector/pgvector:pg16
+      alias: postgres
+      variables:
+        POSTGRES_DB: mend_test
+        POSTGRES_USER: mend_test
+        POSTGRES_PASSWORD: mend_test
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends git ca-certificates
+    - rm -rf /var/lib/apt/lists/*
+  script:
+    - bun install --frozen-lockfile
+    - export TEST_DATABASE_URL=postgres://mend_test:mend_test@postgres:5432/mend_test
+    - bun run db:test:setup
+    - bun test ./src --reporter=junit --reporter-outfile=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+
+e2e:
+  stage: validate
+  services:
+    - name: pgvector/pgvector:pg16
+      alias: postgres
+      variables:
+        POSTGRES_DB: mend_test
+        POSTGRES_USER: mend_test
+        POSTGRES_PASSWORD: mend_test
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends git ca-certificates
+    - rm -rf /var/lib/apt/lists/*
+  script:
+    - bun install --frozen-lockfile
+    - export TEST_DATABASE_URL=postgres://mend_test:mend_test@postgres:5432/mend_test
+    - bun run db:test:setup
+    - bun run test:e2e

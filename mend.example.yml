@@ -1,0 +1,134 @@
+projects:
+  backend:
+    platform: gitlab
+    url: https://gitlab.com
+    token: ${BACKEND_GITLAB_TOKEN}
+    webhook_secret: ${BACKEND_WEBHOOK_SECRET}
+    project_id: 123
+    repo_url: git@gitlab.com:org/backend.git
+    default_branch: main
+    trigger:
+      mode: ready
+    tools:
+      context7:
+        # api_key: ${CONTEXT7_API_KEY}
+    review:
+      llm:
+        model: anthropic/claude-sonnet-4-20250514
+        thinking_level: medium
+      # agent:
+      #   harness: pi # pi, codex, opencode, or ensemble
+      #   model: gpt-5
+      #   thinking_level: medium
+      #   timeout_ms: 1200000
+      #   ensemble:
+      #     finder_harness: codex
+      #     finder_model: gpt-5.5
+      #     finder_thinking_level: low
+      #     finder_timeout_ms: 300000
+      #     verify_enabled: true
+      #     verifier_model: gpt-5.5
+      #     verifier_thinking_level: low
+      #     verifier_timeout_ms: 180000
+      #     deep_samples: 2
+      #     deep_model: gpt-5.5
+      #     deep_timeout_ms: 1200000
+      #     synthesizer_model: gpt-5.5
+      #     synthesizer_timeout_ms: 300000
+      template:
+        prompt: auto
+        label_prefix: "ai-review:"
+      flags:
+        prompt_templates_v2: true
+        schema_v2: true
+        structured_findings_post: true
+        structural_signals: true
+      intent:
+        harness: pi # pi or codex
+        model: anthropic/claude-sonnet-4-20250514
+        thinking_level: minimal
+        timeout_ms: 45000
+        failure_policy: mixed
+      # memory:
+      #   project_scope_usernames:
+      #     - your-gitlab-username
+      # comparison:
+      #   enabled: false
+      #   harness: opencode # pi, codex, opencode, or ensemble
+      #   model: anthropic/claude-sonnet-4-20250514
+      #   thinking_level: medium
+      #   timeout_ms: 300000
+      # fix:
+      #   enabled: true
+      #   automatic: false
+      #   agent:
+      #     harness: codex
+      #     model: gpt-5.5
+      #     thinking_level: medium
+      #     timeout_ms: 1200000
+      #   max_loops: 3
+      #   workspace:
+      #     provider: docker
+      #     image: oven/bun:1.3.0
+      #     network: bridge
+      #     env:
+      #       CODEX_HOME: /codex-home
+      #       NODE_ENV: test
+      #     mounts:
+      #       - source: /tmp/mend-codex-home
+      #         target: /codex-home
+      #         read_only: true
+      #       - source: /tmp/mend-cache
+      #         target: /cache
+      #         read_only: false
+      #     setup:
+      #       - bun install --frozen-lockfile
+      #     checks:
+      #       - bun run check
+
+  # Example: project on a self-hosted GitLab instance
+  # internal-app:
+  #   platform: gitlab
+  #   url: https://gitlab.company.com
+  #   token: ${INTERNAL_GITLAB_TOKEN}
+  #   webhook_secret: ${INTERNAL_WEBHOOK_SECRET}
+  #   project_id: 456
+  #   repo_url: git@gitlab.company.com:org/internal.git
+  #   default_branch: develop
+  #   trigger:
+  #     mode: label
+  #     label: ai-review
+  #   tools:
+  #     context7:
+  #       api_key: ${CONTEXT7_API_KEY}
+  #   review:
+  #     llm:
+  #       model: anthropic/claude-sonnet-4-20250514
+  #       thinking_level: high
+  #     template:
+  #       prompt: auto
+  #       label_prefix: "ai-review:"
+  #     flags:
+  #       prompt_templates_v2: true
+  #       schema_v2: true
+  #       structured_findings_post: true
+  #       structural_signals: true
+  #     intent:
+  #       harness: pi
+  #       model: anthropic/claude-sonnet-4-20250514
+  #       thinking_level: minimal
+  #       timeout_ms: 45000
+  #       failure_policy: mixed
+
+# Improvement miner: periodically clusters confirmed review findings into typed
+# improvement proposals (tooling / instructions / process). Global execution over
+# all configured projects; proposals are surfaced in the /improvements dashboard
+# and the `bun run improvements` CLI. Never posts to MRs.
+# improvements:
+#   enabled: false
+#   interval_days: 7
+#   agent:
+#     harness: codex
+#     model: gpt-5.5
+#     thinking_level: low
+#     timeout_ms: 120000

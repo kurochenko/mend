@@ -1,0 +1,29 @@
+{
+  "expectedFindings": [
+    {
+      "id": "known-payment-await",
+      "fileGlob": "src/payments/**",
+      "lineRange": {
+        "from": 42,
+        "to": 45
+      },
+      "category": "correctness",
+      "pattern": "missing await|unhandled promise",
+      "note": "Known planted payment promise handling issue."
+    }
+  ],
+  "forbiddenFindings": [
+    {
+      "id": "style-only-nit",
+      "fileGlob": "src/payments/**",
+      "pattern": "rename local variable|purely stylistic",
+      "note": "Style-only comments are false positives for this fixture."
+    }
+  ],
+  "expectedResolutionVerdicts": [
+    {
+      "previousFindingRef": "previous-finding-id",
+      "status": "fixed"
+    }
+  ]
+}

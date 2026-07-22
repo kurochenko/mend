@@ -1,0 +1,40 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!node_modules/**",
+      "!dist/**",
+      "!out/**",
+      "!coverage/**",
+      "!drizzle/**",
+      "!fixtures/**",
+      "!sessions/**",
+      "!workspaces/**",
+      "!.beads/**",
+      "!.claude/**",
+      "!.codex/**",
+      "!.opencode/**",
+      "!.skillbook/**",
+      "!private/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "json": {
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  }
+}

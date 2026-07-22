@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "skills": {
+    "beads": {
+      "version": 1,
+      "hash": "sha256:c742129d86b9a0eec1943571a207be5f437d22ab4f7ce1edc106772c81894c70"
+    },
+    "coding-general": {
+      "version": 3,
+      "hash": "sha256:352341519a49378ed6304df55850cca7a1e5e6935bb856c36e5656324333141b"
+    },
+    "coding-typescript": {
+      "version": 3,
+      "hash": "sha256:d967ff2a39c142d563d8b387846d552c2ea9c624cc1564dfa954fafd0fdb1354"
+    },
+    "git": {
+      "version": 4,
+      "hash": "sha256:32616cf8513a4d62d81690a89820baa1f8785373c21c4d3a7cd1233cc56d73f3"
+    },
+    "skillbook": {
+      "version": 2,
+      "hash": "sha256:f13f446be8cfef3a08153ec34f8313546b8a361ae26d3d66aa1ffa78633e8679"
+    },
+    "excalidraw-mcp": {
+      "version": 1,
+      "hash": "sha256:8c3436272aeb024580e60e730e6565ffdb4b6c05ae067a75c7fd13cefedb4375"
+    },
+    "branch-review": {
+      "version": 2,
+      "hash": "sha256:a0ab81c3bbc48b5140f1c30fccf1967ca74824124de25582c4c84f4f83785730"
+    },
+    "code-review-general": {
+      "version": 3,
+      "hash": "sha256:c8c23363c6dc77d93162b9de43c41c9054bae971350154de14018f7993f2c992"
+    },
+    "gitlab-mr-review": {
+      "version": 1,
+      "hash": "sha256:40002edec1cbae1e7164afbee9c5aa234068a34911f1ef087943f56c359e2363"
+    },
+    "typescript-cli": {
+      "version": 1,
+      "hash": "sha256:975668b2a5a57be2dd167e4829996bbe0da201c87b253724bbb84d686bf7fa53"
+    },
+    "feature-layout": {
+      "version": 4,
+      "hash": "sha256:0864291e93466ecd294182e53638cc20f9b0bba25174c1a97673be4a53e422a6"
+    },
+    "deep-branch-review": {
+      "version": 2,
+      "hash": "sha256:a186ae846f93c28647d68957c8e5da8ccf6c9dbf2698087bd66165a7ed8a1123"
+    }
+  },
+  "harnesses": [
+    "codex",
+    "cursor",
+    "opencode",
+    "pi"
+  ],
+  "harnessModes": {
+    "codex": "symlink",
+    "cursor": "symlink",
+    "pi": "symlink"
+  }
+}

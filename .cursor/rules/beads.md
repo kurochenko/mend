@@ -1,0 +1,1 @@
+../../.skillbook/skills/beads/SKILL.md

@@ -1,0 +1,2 @@
+CREATE TYPE "public"."review_memory_status" AS ENUM('active', 'archived');--> statement-breakpoint
+ALTER TABLE "review_memory_entries" ALTER COLUMN "status" SET DATA TYPE review_memory_status USING status::review_memory_status;

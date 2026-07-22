@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "name": "demo-media-upload",
+      "projectKey": "demo-app",
+      "mrIid": 1,
+      "commitSha": "1111111111111111111111111111111111111111"
+    },
+    {
+      "name": "demo-error-handling",
+      "projectKey": "demo-app",
+      "mrIid": 2,
+      "commitSha": "2222222222222222222222222222222222222222"
+    },
+    {
+      "name": "demo-billing",
+      "projectKey": "demo-app",
+      "mrIid": 3,
+      "commitSha": "3333333333333333333333333333333333333333"
+    },
+    {
+      "name": "demo-refactor",
+      "projectKey": "demo-app",
+      "mrIid": 4,
+      "commitSha": "4444444444444444444444444444444444444444"
+    },
+    {
+      "name": "demo-calendar",
+      "projectKey": "demo-web",
+      "mrIid": 5,
+      "commitSha": "5555555555555555555555555555555555555555"
+    },
+    {
+      "name": "demo-migration",
+      "projectKey": "demo-web",
+      "mrIid": 6,
+      "commitSha": "6666666666666666666666666666666666666666"
+    }
+  ]
+}

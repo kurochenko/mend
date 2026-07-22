@@ -1,0 +1,49 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# Mend runtime data
+sessions/
+workspaces/
+fixtures/webhooks/
+mend.yml
+
+# Local-only private files (infra runbooks, issue tracker, real review data)
+# .beads is a symlink into private/, so no trailing slash
+private/
+.beads
+
+# Per-project review skills are deployment data; only the template ships
+skills/*
+!skills/example-project
