@@ -7,7 +7,7 @@ It runs on your own machine against your own projects, and it works with **subsc
 ## Platform support
 
 - **GitLab** — supported and running in production (gitlab.com and self-hosted).
-- **GitHub** — under active development, not usable yet.
+- **GitHub** — experimental: implemented behind the same review-provider port, but not yet exercised against a live GitHub project. Expect rough edges.
 
 ## How it works
 
