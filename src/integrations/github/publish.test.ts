@@ -85,6 +85,7 @@ describe('publishReviewBatch', () => {
     }
     expect(JSON.parse(reviewInit.body)).toEqual({
       commit_id: 'head',
+      body: '<!-- mend:draft-run:run-1 -->',
       event: 'COMMENT',
       comments: [
         { path: 'src/new.ts', body: 'new', line: 5, side: 'RIGHT' },
@@ -152,7 +153,7 @@ describe('publishReviewBatch', () => {
     )
   })
 
-  test('deletes empty pending review shells before publishing', async () => {
+  test('refuses to delete unmarked empty pending reviews', async () => {
     const classifyDraft = mock(() => 'foreign' as const)
     const fetchMock = mock()
       .mockImplementationOnce(
@@ -164,44 +165,25 @@ describe('publishReviewBatch', () => {
           ),
       )
       .mockImplementationOnce(async () => new Response('[]'))
-      .mockImplementationOnce(async () => new Response(null, { status: 204 }))
-      .mockImplementationOnce(
-        async () =>
-          new Response(
-            JSON.stringify({
-              id: 100,
-              body: 'summary',
-              user: { id: 1, login: 'mend-bot' },
-            }),
-          ),
-      )
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
-    const result = await publishReviewBatch(project, {
-      changeNumber: 1,
-      projectKey: 'repo',
-      reviewRunId: 'run-1',
-      currentUser: { id: 1, username: 'mend-bot' },
-      diffRefs: { baseSha: 'base', headSha: 'head' },
-      classifyDraft,
-      matchSummaryNote: () => undefined,
-      summaryBody: 'summary',
-      inlineDrafts: [],
-    })
-
-    expect(result).toMatchObject({
-      preExistingDraftCount: 0,
-      recoveredDraftCount: 0,
-      draftRecoveryAction: 'cleaned',
-      summaryNoteId: 100,
-    })
+    await expect(
+      publishReviewBatch(project, {
+        changeNumber: 1,
+        projectKey: 'repo',
+        reviewRunId: 'run-1',
+        currentUser: { id: 1, username: 'mend-bot' },
+        diffRefs: { baseSha: 'base', headSha: 'head' },
+        classifyDraft,
+        matchSummaryNote: () => undefined,
+        summaryBody: 'summary',
+        inlineDrafts: [],
+      }),
+    ).rejects.toThrow(
+      'Refusing to publish review for repo PR #1: found 1 pending review comments (0 current-run, 0 other-run, 1 foreign)',
+    )
     expect(classifyDraft).not.toHaveBeenCalled()
-    const deleteCall = fetchMock.mock.calls[2]
-    if (!deleteCall) {
-      throw new Error('expected pending review delete call')
-    }
-    expect(`${deleteCall[0]}`).toContain('/pulls/1/reviews/5')
-    expect((deleteCall[1] as RequestInit).method).toBe('DELETE')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   test('refuses pending review with foreign top-level body and zero comments', async () => {

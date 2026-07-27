@@ -4,6 +4,7 @@ import { createPrIssueComment, listPrIssueComments } from '@/integrations/github
 import { githubApi, githubPaginated } from '@/integrations/github/transport'
 import { githubRepoPath } from '@/integrations/github/pr'
 import { createWithReconciliation } from '@/integrations/idempotent'
+import { buildDraftRunMarker } from '@/lib/review-draft-marker'
 import type {
   DraftClassification,
   PublishBatchResult,
@@ -85,10 +86,16 @@ const classifyPendingReviews = async (params: {
   const classified: DraftClassification[] = []
   for (const review of pendingReviews) {
     const comments = await listReviewComments(params.project, params.changeNumber, review.id)
+    let classifiedPartCount = 0
     if (typeof review.body === 'string' && review.body.trim().length > 0) {
       classified.push(params.classifyDraft(review.body))
+      classifiedPartCount += 1
     }
     classified.push(...comments.map((comment) => params.classifyDraft(comment.body)))
+    classifiedPartCount += comments.length
+    if (classifiedPartCount === 0) {
+      classified.push('foreign')
+    }
   }
 
   const preExistingDraftCount = classified.length
@@ -138,6 +145,7 @@ const mapReviewComment = (draft: PublishInlineDraft) => ({
 const publishInlineReview = async (params: {
   project: GitHubProjectConfig
   changeNumber: number
+  reviewRunId: string
   inlineDrafts: PublishInlineDraft[]
   diffRefs: DiffRefs
 }): Promise<{ reconciled: boolean }> => {
@@ -155,6 +163,7 @@ const publishInlineReview = async (params: {
           method: 'POST',
           body: JSON.stringify({
             commit_id: params.diffRefs.headSha,
+            body: buildDraftRunMarker(params.reviewRunId),
             event: 'COMMENT',
             comments: params.inlineDrafts.map(mapReviewComment),
           }),
@@ -211,6 +220,7 @@ export const publishReviewBatch = async (
     const publishResult = await publishInlineReview({
       project,
       changeNumber: params.changeNumber,
+      reviewRunId: params.reviewRunId,
       inlineDrafts: params.inlineDrafts,
       diffRefs: params.diffRefs,
     })

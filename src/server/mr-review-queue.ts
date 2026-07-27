@@ -136,17 +136,11 @@ const extractWebhookCommitSha = (payload: unknown): string | null => {
     return null
   }
 
-  const objectAttributes = (payload as { object_attributes?: unknown }).object_attributes
-  if (!objectAttributes || typeof objectAttributes !== 'object') {
-    return null
+  const webhook = payload as {
+    object_attributes?: { last_commit?: { id?: unknown } }
+    pull_request?: { head?: { sha?: unknown } }
   }
-
-  const lastCommit = (objectAttributes as { last_commit?: unknown }).last_commit
-  if (!lastCommit || typeof lastCommit !== 'object') {
-    return null
-  }
-
-  const commitSha = (lastCommit as { id?: unknown }).id
+  const commitSha = webhook.object_attributes?.last_commit?.id ?? webhook.pull_request?.head?.sha
   return typeof commitSha === 'string' && commitSha.length > 0 ? commitSha : null
 }
 

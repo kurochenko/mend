@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { GitHubProjectConfig } from '@/config'
-import { listThreads } from '@/integrations/github/threads'
+import { listThreads, resolveThread } from '@/integrations/github/threads'
 
 const project = {
   key: 'repo',
@@ -77,6 +77,7 @@ describe('listThreads', () => {
                                 diffSide: 'RIGHT',
                               },
                             ],
+                            pageInfo: { hasNextPage: false, endCursor: null },
                           },
                         },
                       ],
@@ -115,7 +116,7 @@ describe('listThreads', () => {
           body: 'inline',
           resolvable: true,
           resolved: true,
-          position: { path: 'src/app.ts', oldPath: 'src/app.ts', line: 12, oldLine: 10 },
+          position: { path: 'src/app.ts', oldPath: 'src/app.ts', line: 12, oldLine: null },
         },
       ],
     })
@@ -124,5 +125,145 @@ describe('listThreads', () => {
       isThread: false,
       messages: [{ id: '55', body: 'summary', resolvable: false, position: null }],
     })
+  })
+
+  test('maps LEFT-side comments to the old file position and outdated comments to originalLine', async () => {
+    const reviewThread = (comments: Record<string, unknown>[]) => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+                {
+                  id: 'thread-node',
+                  isResolved: false,
+                  comments: {
+                    nodes: comments,
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    })
+    const comment = (overrides: Record<string, unknown>) => ({
+      id: 'comment-node',
+      databaseId: 44,
+      body: 'inline',
+      author: { login: 'alice', databaseId: 7 },
+      path: 'src/app.ts',
+      ...overrides,
+    })
+    const fetchMock = mock()
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify(
+              reviewThread([
+                comment({ line: 8, originalLine: 8, diffSide: 'LEFT' }),
+                comment({
+                  id: 'comment-node-2',
+                  databaseId: 45,
+                  line: null,
+                  originalLine: 15,
+                  diffSide: 'RIGHT',
+                }),
+              ]),
+            ),
+          ),
+      )
+      .mockImplementationOnce(async () => new Response(JSON.stringify([])))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const threads = await listThreads(project, 1)
+
+    expect(threads[0]?.messages[0]?.position).toEqual({
+      path: 'src/app.ts',
+      oldPath: 'src/app.ts',
+      line: null,
+      oldLine: 8,
+    })
+    expect(threads[0]?.messages[1]?.position).toEqual({
+      path: 'src/app.ts',
+      oldPath: 'src/app.ts',
+      line: 15,
+      oldLine: null,
+    })
+  })
+
+  test('paginates thread comments beyond the first page', async () => {
+    const comment = (id: number) => ({
+      id: `comment-node-${id}`,
+      databaseId: id,
+      body: `comment ${id}`,
+      author: { login: 'alice', databaseId: 7 },
+      path: 'src/app.ts',
+      line: id,
+      originalLine: id,
+      diffSide: 'RIGHT',
+    })
+    const fetchMock = mock()
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      nodes: [
+                        {
+                          id: 'thread-node',
+                          isResolved: false,
+                          comments: {
+                            nodes: [comment(1)],
+                            pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+                          },
+                        },
+                      ],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+      )
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                node: {
+                  comments: {
+                    nodes: [comment(2)],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            }),
+          ),
+      )
+      .mockImplementationOnce(async () => new Response(JSON.stringify([])))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const threads = await listThreads(project, 1)
+
+    expect(threads[0]?.messages.map((message) => message.body)).toEqual(['comment 1', 'comment 2'])
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('resolveThread', () => {
+  test('treats issue comment pseudo-threads as a no-op without API calls', async () => {
+    const fetchMock = mock()
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await resolveThread(project, 'note_55')
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

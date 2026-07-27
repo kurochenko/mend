@@ -848,6 +848,19 @@ describe('processGitlabMergeRequestNote', () => {
     expect(mockAddNoteReaction).not.toHaveBeenCalled()
   })
 
+  test('adds reactions through thread message endpoint for DiffNote type without discussion_id', async () => {
+    const discussion = makeDiscussion()
+    mockListThreads.mockImplementation(() => Promise.resolve([discussion]))
+
+    const payload = makeNotePayload({ discussion_id: null, type: 'DiffNote' })
+
+    await processGitlabMergeRequestNote({ project: makeProject(), payload })
+
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'eyes')
+    expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
+    expect(mockAddNoteReaction).not.toHaveBeenCalled()
+  })
+
   test('accept command updates the persisted finding decision only', async () => {
     const discussion = makeDiscussion({
       messages: [makeBotNote(), makeHumanNote({ body: '@mend accept' })],

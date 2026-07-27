@@ -46,6 +46,7 @@ export interface ChangeRequestDetails {
   description: string
   labels: string[]
   sourceBranch: string
+  sourceRepository?: string | null
   targetBranch: string
   url: string
   sha: string

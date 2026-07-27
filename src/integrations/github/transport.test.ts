@@ -121,4 +121,31 @@ describe('githubPaginated', () => {
       'https://api.github.com/repos/org/repo/issues/1/comments?page=2',
     )
   })
+
+  test('strips the enterprise api prefix from Link urls', async () => {
+    const gheProject = { ...project, url: 'https://ghe.example.com' }
+    const fetchMock = mock()
+      .mockImplementationOnce(
+        async () =>
+          new Response('[{"id":1}]', {
+            status: 200,
+            headers: {
+              Link: '<https://ghe.example.com/api/v3/repos/org/repo/issues/1/comments?page=2>; rel="next"',
+            },
+          }),
+      )
+      .mockImplementationOnce(async () => new Response('[{"id":2}]', { status: 200 }))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await githubPaginated(
+      gheProject,
+      '/repos/org/repo/issues/1/comments',
+      (value) => value as Array<{ id: number }>,
+    )
+
+    expect(result).toEqual([{ id: 1 }, { id: 2 }])
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      'https://ghe.example.com/api/v3/repos/org/repo/issues/1/comments?page=2',
+    )
+  })
 })

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { GitHubProjectConfig } from '@/config'
 import { githubGraphql } from '@/integrations/github/graphql'
+import type { ProviderApiError } from '@/integrations/provider/error'
 
 const project = {
   key: 'repo',
@@ -63,5 +64,18 @@ describe('githubGraphql', () => {
     ) as unknown as typeof fetch
 
     await expect(githubGraphql(project, 'query Test { ok }', {})).rejects.toThrow('first; second')
+  })
+
+  test('uses typed transport errors for non-success responses', async () => {
+    globalThis.fetch = mock(
+      async () => new Response('bad query', { status: 422 }),
+    ) as unknown as typeof fetch
+
+    await expect(githubGraphql(project, 'query Test { ok }', {})).rejects.toMatchObject({
+      name: 'ProviderApiError',
+      status: 422,
+      method: 'POST',
+      message: 'GitHub API 422 POST GraphQL: bad query',
+    } satisfies Partial<ProviderApiError>)
   })
 })

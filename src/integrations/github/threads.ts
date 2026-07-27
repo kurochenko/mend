@@ -10,6 +10,7 @@ import type {
   ProviderNote,
   ProviderThread,
   ProviderThreadMessage,
+  ThreadPosition,
 } from '@/integrations/provider/types'
 
 interface ReviewThreadsResponse {
@@ -28,6 +29,7 @@ interface GitHubReviewThread {
   isResolved: boolean
   comments: {
     nodes: GitHubReviewThreadComment[]
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
   }
 }
 
@@ -52,6 +54,32 @@ interface ReviewThreadReplyResponse {
   }
 }
 
+interface ReviewThreadCommentsResponse {
+  node: {
+    comments: GitHubReviewThread['comments']
+  } | null
+}
+
+const reviewThreadCommentFields = `
+  id
+  databaseId
+  body
+  author {
+    login
+    ... on User {
+      databaseId
+    }
+  }
+  createdAt
+  updatedAt
+  url
+  path
+  line
+  originalLine
+  startLine
+  diffSide
+`
+
 const listThreadsQuery = `
   query MendReviewThreads($owner: String!, $name: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $name) {
@@ -62,25 +90,31 @@ const listThreadsQuery = `
             isResolved
             comments(first: 100) {
               nodes {
-                id
-                databaseId
-                body
-                author {
-                  login
-                  ... on User {
-                    databaseId
-                  }
-                }
-                createdAt
-                updatedAt
-                url
-                path
-                line
-                originalLine
-                startLine
-                diffSide
+                ${reviewThreadCommentFields}
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
               }
             }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+`
+
+const threadCommentsQuery = `
+  query MendReviewThreadComments($threadId: ID!, $cursor: String) {
+    node(id: $threadId) {
+      ... on PullRequestReviewThread {
+        comments(first: 100, after: $cursor) {
+          nodes {
+            ${reviewThreadCommentFields}
           }
           pageInfo {
             hasNextPage
@@ -96,23 +130,7 @@ const replyMutation = `
   mutation MendReplyToReviewThread($threadId: ID!, $body: String!) {
     addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
       comment {
-        id
-        databaseId
-        body
-        author {
-          login
-          ... on User {
-            databaseId
-          }
-        }
-        createdAt
-        updatedAt
-        url
-        path
-        line
-        originalLine
-        startLine
-        diffSide
+        ${reviewThreadCommentFields}
       }
     }
   }
@@ -127,6 +145,22 @@ const resolveMutation = `
     }
   }
 `
+
+const mapPosition = (comment: GitHubReviewThreadComment): ThreadPosition | null => {
+  const path = comment.path ?? null
+  const line = comment.line ?? comment.originalLine ?? null
+  if (path === null && line === null) {
+    return null
+  }
+
+  const onOldSide = comment.diffSide === 'LEFT'
+  return {
+    path,
+    oldPath: path,
+    line: onOldSide ? null : line,
+    oldLine: onOldSide ? line : null,
+  }
+}
 
 const mapReviewThreadMessage = (
   comment: GitHubReviewThreadComment,
@@ -144,23 +178,43 @@ const mapReviewThreadMessage = (
   createdAt: comment.createdAt,
   updatedAt: comment.updatedAt,
   url: comment.url,
-  position: {
-    path: comment.path ?? null,
-    oldPath: comment.path ?? null,
-    line: comment.line ?? null,
-    oldLine: comment.originalLine ?? null,
-  },
+  position: mapPosition(comment),
   raw: comment,
 })
 
-const mapReviewThread = (thread: GitHubReviewThread): ProviderThread => ({
+const mapReviewThread = (
+  thread: GitHubReviewThread,
+  comments: GitHubReviewThreadComment[],
+): ProviderThread => ({
   id: thread.id,
   isThread: true,
-  messages: thread.comments.nodes.map((comment) =>
-    mapReviewThreadMessage(comment, thread.isResolved),
-  ),
+  messages: comments.map((comment) => mapReviewThreadMessage(comment, thread.isResolved)),
   raw: thread,
 })
+
+const fetchAllThreadComments = async (
+  project: GitHubProjectConfig,
+  threadId: string,
+  firstPage: GitHubReviewThread['comments'],
+): Promise<GitHubReviewThreadComment[]> => {
+  const comments = [...firstPage.nodes]
+  let pageInfo = firstPage.pageInfo
+
+  while (pageInfo.hasNextPage) {
+    const data = await githubGraphql<ReviewThreadCommentsResponse>(project, threadCommentsQuery, {
+      threadId,
+      cursor: pageInfo.endCursor,
+    })
+    const page = data.node?.comments
+    if (!page) {
+      break
+    }
+    comments.push(...page.nodes)
+    pageInfo = page.pageInfo
+  }
+
+  return comments
+}
 
 const mapIssueCommentThread = (note: ProviderNote): ProviderThread => ({
   id: `note_${note.id}`,
@@ -201,7 +255,10 @@ export const listThreads = async (
     })
     const page: ReviewThreadsResponse['repository']['pullRequest']['reviewThreads'] =
       data.repository.pullRequest.reviewThreads
-    reviewThreads.push(...page.nodes.map(mapReviewThread))
+    for (const thread of page.nodes) {
+      const comments = await fetchAllThreadComments(project, thread.id, thread.comments)
+      reviewThreads.push(mapReviewThread(thread, comments))
+    }
     if (!page.pageInfo.hasNextPage) {
       break
     }

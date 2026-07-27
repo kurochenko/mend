@@ -10,7 +10,13 @@ const prSchema = z
     title: z.string(),
     body: z.string().nullable(),
     labels: z.array(labelSchema),
-    head: z.object({ ref: z.string(), sha: z.string() }).passthrough(),
+    head: z
+      .object({
+        ref: z.string(),
+        sha: z.string(),
+        repo: z.object({ full_name: z.string() }).nullable(),
+      })
+      .passthrough(),
     base: z.object({ ref: z.string(), sha: z.string() }).passthrough(),
     html_url: z.string(),
   })
@@ -34,6 +40,7 @@ export const fetchPr = async (
     description: data.body ?? '',
     labels: data.labels.map((label) => label.name),
     sourceBranch: data.head.ref,
+    sourceRepository: data.head.repo?.full_name ?? null,
     targetBranch: data.base.ref,
     url: data.html_url,
     sha: data.head.sha,

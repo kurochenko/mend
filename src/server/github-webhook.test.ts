@@ -1,10 +1,12 @@
 import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import type { GitHubProjectConfig } from '@/config'
+import type { Mastra } from '@mastra/core'
+import type { AppConfig, GitHubProjectConfig } from '@/config'
 import {
   classifyGithubIssueComment,
   classifyGithubPullRequest,
   classifyGithubReviewComment,
+  createGithubWebhookRoute,
   verifyGithubSignature,
 } from '@/server/github-webhook'
 
@@ -63,7 +65,7 @@ const pullRequestPayload = (overrides: Record<string, unknown> = {}) => ({
     state: 'open',
     merged: false,
     labels: [{ name: 'bug' }],
-    head: { ref: 'feature/test' },
+    head: { ref: 'feature/test', sha: 'abc123' },
     base: { ref: 'main' },
     html_url: 'https://github.com/org/repo/pull/42',
   },
@@ -139,52 +141,17 @@ describe('classifyGithubIssueComment', () => {
       noteId: 99,
     })
     expect(result.payload?.object_attributes.discussion_id).toBeNull()
+    expect(result.payload?.object_attributes.type).toBeNull()
     expect(result.payload?.user.username).toBe('alice')
   })
 })
 
 describe('classifyGithubReviewComment', () => {
-  test('resolves discussion id from provider threads when possible', async () => {
+  test('defers thread lookup to asynchronous note processing', () => {
     const fetchMock = mock()
-      .mockImplementationOnce(
-        async () =>
-          new Response(
-            JSON.stringify({
-              data: {
-                repository: {
-                  pullRequest: {
-                    reviewThreads: {
-                      nodes: [
-                        {
-                          id: 'thread-node',
-                          isResolved: false,
-                          comments: {
-                            nodes: [
-                              {
-                                id: 'comment-node',
-                                databaseId: 99,
-                                body: 'inline',
-                                author: { login: 'alice', databaseId: 7 },
-                                path: 'src/app.ts',
-                                line: 1,
-                                originalLine: 1,
-                              },
-                            ],
-                          },
-                        },
-                      ],
-                      pageInfo: { hasNextPage: false, endCursor: null },
-                    },
-                  },
-                },
-              },
-            }),
-          ),
-      )
-      .mockImplementationOnce(async () => new Response('[]'))
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
-    const result = await classifyGithubReviewComment(project, {
+    const result = classifyGithubReviewComment(project, {
       action: 'created',
       repository: { id: 123, full_name: 'org/repo' },
       pull_request: { number: 42 },
@@ -196,6 +163,64 @@ describe('classifyGithubReviewComment', () => {
       },
     })
 
-    expect(result.payload?.object_attributes.discussion_id).toBe('thread-node')
+    expect(result.payload?.object_attributes.discussion_id).toBeNull()
+    expect(result.payload?.object_attributes.type).toBe('DiffNote')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('github webhook route', () => {
+  const sign = (body: string) =>
+    `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`
+
+  const createApp = () =>
+    createGithubWebhookRoute(
+      { projects: new Map([['repo', project]]) } as unknown as AppConfig,
+      {} as Mastra,
+    )
+
+  const post = (body: string, event: string, signature?: string) =>
+    createApp().request('/', {
+      method: 'POST',
+      headers: {
+        'X-GitHub-Event': event,
+        ...(signature ? { 'X-Hub-Signature-256': signature } : {}),
+      },
+      body,
+    })
+
+  test('responds to ping with a valid signature', async () => {
+    const body = JSON.stringify({ zen: 'ok', repository: { id: 123, full_name: 'org/repo' } })
+    const res = await post(body, 'ping', sign(body))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+
+  test('rejects invalid signatures', async () => {
+    const body = JSON.stringify({ repository: { id: 123, full_name: 'org/repo' } })
+    const res = await post(body, 'ping', 'sha256=bad')
+
+    expect(res.status).toBe(401)
+  })
+
+  test('rejects missing signatures', async () => {
+    const body = JSON.stringify({ repository: { id: 123, full_name: 'org/repo' } })
+    const res = await post(body, 'ping')
+
+    expect(res.status).toBe(401)
+  })
+
+  test('rejects unknown repositories', async () => {
+    const body = JSON.stringify({ repository: { id: 1, full_name: 'other/repo' } })
+    const res = await post(body, 'ping', sign(body))
+
+    expect(res.status).toBe(404)
+  })
+
+  test('rejects invalid JSON payloads', async () => {
+    const res = await post('not json', 'ping', sign('not json'))
+
+    expect(res.status).toBe(400)
   })
 })

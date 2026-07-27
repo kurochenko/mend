@@ -57,7 +57,7 @@ export const executeThreadResolutions = async (params: {
 
     try {
       await dependencies.persistReply({
-        ...(params.provider.kind === 'gitlab' ? {} : { provider: params.provider.kind }),
+        provider: params.provider.kind,
         threadId: resolution.discussionId,
         reviewRunId: params.reviewRunId,
         reply,

@@ -14,7 +14,6 @@ import {
   type ReviewThreadRecord,
 } from '@/db/review-threads'
 import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
-import type { ReviewProvider as PersistedReviewProvider } from '@/lib/review-threads'
 import {
   collectPersistableThreads,
   deriveThreadContext,
@@ -109,7 +108,7 @@ export const persistOutboundReply = async (params: {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   return await dependencies.upsertReviewMessage({
     threadId: params.thread.id,
-    provider: params.thread.provider as PersistedReviewProvider,
+    provider: params.thread.provider,
     reviewRunId: params.reviewRunId,
     authorType: 'agent',
     authorExternalId: `${params.reply.author.id}`,
@@ -126,7 +125,7 @@ export const persistOutboundReply = async (params: {
 }
 
 export const persistProviderReplyLocally = async (params: {
-  provider?: 'gitlab' | 'github'
+  provider: 'gitlab' | 'github'
   threadId: string
   reviewRunId: string | null
   reply: ProviderThreadMessage
@@ -135,7 +134,7 @@ export const persistProviderReplyLocally = async (params: {
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   const thread = await dependencies.getReviewThreadByProviderThreadId({
-    provider: params.provider ?? 'gitlab',
+    provider: params.provider,
     providerThreadId: params.threadId,
   })
 
@@ -155,13 +154,13 @@ export const persistProviderReplyLocally = async (params: {
   }
 
   await dependencies.updateReviewThreadStatusByProviderThreadId({
-    provider: params.provider ?? 'gitlab',
+    provider: params.provider,
     providerThreadId: params.threadId,
     status: 'resolved',
   })
 
   const finding = await dependencies.getReviewFindingByProviderThreadId({
-    provider: params.provider ?? 'gitlab',
+    provider: params.provider,
     providerThreadId: params.threadId,
   })
 
@@ -176,13 +175,13 @@ export const persistProviderReplyLocally = async (params: {
 }
 
 export const markProviderThreadResolved = async (params: {
-  provider?: 'gitlab' | 'github'
+  provider: 'gitlab' | 'github'
   providerThreadId: string
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   await dependencies.updateReviewThreadStatusByProviderThreadId({
-    provider: params.provider ?? 'gitlab',
+    provider: params.provider,
     providerThreadId: params.providerThreadId,
     status: 'resolved',
   })

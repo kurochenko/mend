@@ -11,6 +11,15 @@ export interface GitHubApiOptions {
   maxRetries?: number
 }
 
+interface GitHubRequestParams {
+  project: GitHubProjectConfig
+  url: string
+  label: string
+  init?: RequestInit
+  timeoutMs?: number
+  maxRetries?: number
+}
+
 export const githubApiBase = (project: GitHubProjectConfig): string => {
   const url = new URL(project.url)
   if (url.hostname === 'github.com') {
@@ -84,32 +93,28 @@ const fetchWithTimeout = async (
   }
 }
 
-export const githubApi = async (
-  project: GitHubProjectConfig,
-  path: string,
-  init?: RequestInit,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-  options?: GitHubApiOptions,
-): Promise<Response> => {
-  const url = `${githubApiBase(project)}${path}`
-  const method = init?.method ?? 'GET'
-  const maxRetries = options?.maxRetries ?? MAX_RETRIES
+export const githubRequest = async (params: GitHubRequestParams): Promise<Response> => {
+  const method = params.init?.method ?? 'GET'
+  const maxRetries = params.maxRetries ?? MAX_RETRIES
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const headers = {
-    Authorization: `Bearer ${project.token}`,
+    Authorization: `Bearer ${params.project.token}`,
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json',
-    ...init?.headers,
+    ...params.init?.headers,
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let res: Response
 
     try {
-      res = await fetchWithTimeout(url, { ...init, headers }, timeoutMs)
+      res = await fetchWithTimeout(params.url, { ...params.init, headers }, timeoutMs)
     } catch (error) {
       if (attempt === maxRetries) {
-        throw new Error(`GitHub API request failed ${method} ${path}: ${toErrorMessage(error)}`)
+        throw new Error(
+          `GitHub API request failed ${method} ${params.label}: ${toErrorMessage(error)}`,
+        )
       }
       await Bun.sleep(BASE_DELAY_MS * 2 ** attempt)
       continue
@@ -122,7 +127,7 @@ export const githubApi = async (
     if (!isRetryable(res) || attempt === maxRetries) {
       const body = await res.text()
       throw new ProviderApiError({
-        message: `GitHub API ${res.status} ${method} ${path}: ${body}`,
+        message: `GitHub API ${res.status} ${method} ${params.label}: ${body}`,
         status: res.status,
         method,
       })
@@ -132,6 +137,32 @@ export const githubApi = async (
   }
 
   throw new Error('unreachable')
+}
+
+export const githubApi = async (
+  project: GitHubProjectConfig,
+  path: string,
+  init?: RequestInit,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  options?: GitHubApiOptions,
+): Promise<Response> =>
+  await githubRequest({
+    project,
+    url: `${githubApiBase(project)}${path}`,
+    label: path,
+    init,
+    timeoutMs,
+    maxRetries: options?.maxRetries,
+  })
+
+const nextPagePath = (project: GitHubProjectConfig, url: string): string => {
+  const base = githubApiBase(project)
+  if (url.startsWith(base)) {
+    return url.slice(base.length)
+  }
+
+  const parsed = new URL(url)
+  return `${parsed.pathname}${parsed.search}`
 }
 
 export const githubPaginated = async <T>(
@@ -151,7 +182,7 @@ export const githubPaginated = async <T>(
       .map((part) => part.trim())
       .find((part) => part.includes('rel="next"'))
     const match = next?.match(/<([^>]+)>/)
-    nextPath = match ? `${new URL(match[1]!).pathname}${new URL(match[1]!).search}` : null
+    nextPath = match ? nextPagePath(project, match[1]!) : null
   }
 
   return out

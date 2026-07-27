@@ -3,7 +3,6 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, GitHubProjectConfig } from '@/config'
-import { createReviewProvider } from '@/integrations/provider/client'
 import { enqueueMrReview } from '@/server/mr-review-queue'
 import { processReviewNoteEvent } from '@/server/review-note-events'
 import type { ReviewNoteEventPayload, ReviewWebhookEvent } from '@/server/webhook-events'
@@ -21,7 +20,7 @@ const pullRequestSchema = z
     state: z.string(),
     merged: z.boolean().optional(),
     labels: z.array(githubLabelSchema),
-    head: z.object({ ref: z.string() }).passthrough(),
+    head: z.object({ ref: z.string(), sha: z.string() }).passthrough(),
     base: z.object({ ref: z.string() }).passthrough(),
     html_url: z.string(),
   })
@@ -149,7 +148,7 @@ const notePayload = (params: {
   url?: string
   createdAt?: string
   updatedAt?: string
-  discussionId?: string | null
+  inline: boolean
 }): ReviewNoteEventPayload => ({
   project: { id: params.repositoryId },
   user: { id: params.user.id, username: params.user.login },
@@ -158,8 +157,8 @@ const notePayload = (params: {
     id: params.noteId,
     note: params.body,
     noteable_type: 'MergeRequest',
-    discussion_id: params.discussionId ?? null,
-    type: params.discussionId ? 'DiffNote' : null,
+    discussion_id: null,
+    type: params.inline ? 'DiffNote' : null,
     action: 'create',
     url: params.url,
     created_at: params.createdAt,
@@ -188,7 +187,7 @@ export const classifyGithubIssueComment = (
     url: payload.comment.html_url,
     createdAt: payload.comment.created_at,
     updatedAt: payload.comment.updated_at,
-    discussionId: null,
+    inline: false,
   })
 
   return {
@@ -203,19 +202,13 @@ export const classifyGithubIssueComment = (
   }
 }
 
-export const classifyGithubReviewComment = async (
+export const classifyGithubReviewComment = (
   project: GitHubProjectConfig,
   payload: z.infer<typeof reviewCommentPayloadSchema>,
-): Promise<{ event: ReviewWebhookEvent; payload: ReviewNoteEventPayload | null }> => {
+): { event: ReviewWebhookEvent; payload: ReviewNoteEventPayload | null } => {
   if (payload.action !== 'created') {
     return { event: { type: 'ignored', reason: `action "${payload.action}"` }, payload: null }
   }
-
-  const threads = await createReviewProvider(project).listThreads(payload.pull_request.number)
-  const discussionId =
-    threads.find((thread) =>
-      thread.messages.some((message) => message.id === `${payload.comment.id}`),
-    )?.id ?? null
 
   const normalized = notePayload({
     repositoryId: payload.repository.id,
@@ -226,7 +219,7 @@ export const classifyGithubReviewComment = async (
     url: payload.comment.html_url,
     createdAt: payload.comment.created_at,
     updatedAt: payload.comment.updated_at,
-    discussionId,
+    inline: true,
   })
 
   return {
@@ -294,7 +287,7 @@ export const createGithubWebhookRoute = (config: AppConfig, mastra: Mastra) => {
       if (!parseResult.success) {
         return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
       }
-      const result = await classifyGithubReviewComment(project, parseResult.data)
+      const result = classifyGithubReviewComment(project, parseResult.data)
       event = result.event
       normalizedNotePayload = result.payload
     }

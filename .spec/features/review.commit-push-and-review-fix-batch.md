@@ -10,9 +10,11 @@ links:
     target: review.term:fixer-agent-result
   - edge: includes
     target: review.flow:commit-push-fix-batch
+  - edge: includes
+    target: review.inv:fix-batch-source-repository
 tags:
   - fix-loop
   - git
 ---
 
-Mend can complete a successful [[review.term:fix-batch-request]] by using the [[review.term:fixer-agent-result]] to create one batch commit, push the MR source branch, and [[review.flow:commit-push-fix-batch]] into the standard review loop.
+Mend can complete a successful [[review.term:fix-batch-request]] by using the [[review.term:fixer-agent-result]] to create one batch commit, push the MR source branch, and [[review.flow:commit-push-fix-batch]] into the standard review loop while respecting [[review.inv:fix-batch-source-repository]].

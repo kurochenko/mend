@@ -199,6 +199,15 @@ const makePayload = (sha = 'abc123'): unknown => ({
   },
 })
 
+const makeGithubPayload = (sha = 'abc123'): unknown => ({
+  action: 'synchronize',
+  pull_request: {
+    head: {
+      sha,
+    },
+  },
+})
+
 const makeQueueRecord = (overrides: Partial<ReviewQueueRecord> = {}): ReviewQueueRecord => ({
   id: 'test-project:42',
   projectKey: 'test-project',
@@ -356,6 +365,17 @@ describe('enqueueMrReview', () => {
     })
 
     expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'abc123')
+  })
+
+  test('pins GitHub pending work to the webhook head SHA', async () => {
+    await enqueueReview({
+      mastra: makeMastra(),
+      project: makeProject(),
+      payload: makeGithubPayload('def456'),
+      event: makeEvent(),
+    })
+
+    expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'def456')
   })
 
   test('newer webhook keeps status running when a review is already running', async () => {

@@ -424,6 +424,8 @@ export const processReviewNoteEvent = async (params: {
   const noteId = payload.object_attributes.id
   const noteAction = payload.object_attributes.action ?? 'create'
   const webhookDiscussionId = payload.object_attributes.discussion_id ?? undefined
+  const hasThreadContext =
+    webhookDiscussionId !== undefined || payload.object_attributes.type === 'DiffNote'
   const directMention = mentionsBot(payload.object_attributes.note, currentUser.username)
 
   if (noteAction !== 'create') {
@@ -561,7 +563,7 @@ export const processReviewNoteEvent = async (params: {
       mrIid,
       noteId,
       name: 'eyes',
-      hasThreadContext: webhookDiscussionId !== undefined,
+      hasThreadContext,
     }).catch((error) => {
       console.warn(`[notes] failed to add eyes reaction to note ${noteId}: ${error}`)
     })
@@ -586,7 +588,7 @@ export const processReviewNoteEvent = async (params: {
           mrIid,
           noteId,
           name: 'white_check_mark',
-          hasThreadContext: webhookDiscussionId !== undefined,
+          hasThreadContext,
         }).catch((error) => {
           console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
         })
@@ -781,7 +783,7 @@ export const processReviewNoteEvent = async (params: {
         mrIid,
         noteId,
         name: 'white_check_mark',
-        hasThreadContext: webhookDiscussionId !== undefined,
+        hasThreadContext,
       }).catch((error) => {
         console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
       })

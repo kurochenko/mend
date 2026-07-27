@@ -48,7 +48,7 @@ const defaultDependencies: FixerFindingStateDependencies = {
   storeReply: async (params) => {
     await upsertReviewMessage({
       threadId: params.finding.threadId,
-      provider: 'gitlab',
+      provider: params.finding.provider,
       reviewRunId: params.finding.reviewRunId,
       authorType: 'agent',
       authorExternalId: `${params.reply.author.id}`,

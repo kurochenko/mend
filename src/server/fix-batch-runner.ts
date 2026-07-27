@@ -13,6 +13,7 @@ import { getServiceRuntimeMode } from '@/db/service-runtime'
 import { createFixWorkspaceProvider } from '@/fix-workspaces/factory'
 import type { PreparedFixWorkspace } from '@/fix-workspaces/types'
 import { createReviewProvider } from '@/integrations/provider/client'
+import type { ChangeRequestDetails } from '@/integrations/provider/types'
 import { createWorktree, ensureClone, removeWorktree } from '@/integrations/repo'
 import { toErrorMessage } from '@/lib/errors'
 import { completeFixBatch } from '@/mastra/fix/commit-push'
@@ -70,6 +71,20 @@ const defaultDependencies: FixBatchRunnerDependencies = {
 const isDraining = async (dependencies: FixBatchRunnerDependencies): Promise<boolean> =>
   (await dependencies.getServiceRuntimeMode()) === 'draining'
 
+export const assertFixSourceRepository = (
+  project: ProjectConfig,
+  changeRequest: ChangeRequestDetails,
+): void => {
+  if (
+    project.platform === 'github' &&
+    changeRequest.sourceRepository?.toLowerCase() !== project.repo.toLowerCase()
+  ) {
+    throw new Error(
+      `GitHub fix batches require the pull request source branch to belong to ${project.repo}`,
+    )
+  }
+}
+
 const runFixBatch = async (params: {
   mastra: Mastra
   project: ProjectConfig
@@ -88,6 +103,7 @@ const runFixBatch = async (params: {
     })
     const provider = dependencies.createReviewProvider(project)
     const mr = await provider.fetchChangeRequest(batch.mrIid)
+    assertFixSourceRepository(project, mr)
 
     await dependencies.ensureClone(project)
     const worktreePath = await dependencies.createWorktree(

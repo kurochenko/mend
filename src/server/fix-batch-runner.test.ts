@@ -4,7 +4,7 @@ import type { FixBatchRecord } from '@/db/fix-batches'
 import type { ReviewFindingRecord } from '@/db/review-findings'
 import type { PreparedFixWorkspace, WorkspaceCommandResult } from '@/fix-workspaces/types'
 import type { FixerOutput } from '@/mastra/fix/schema'
-import { ensureFixBatchRunner } from '@/server/fix-batch-runner'
+import { assertFixSourceRepository, ensureFixBatchRunner } from '@/server/fix-batch-runner'
 
 const now = new Date('2026-06-04T00:00:00Z')
 
@@ -268,5 +268,30 @@ describe('ensureFixBatchRunner', () => {
     expect(completeFixBatch).toHaveBeenCalled()
     expect(workspace.teardown).toHaveBeenCalled()
     expect(failFixBatchRun).not.toHaveBeenCalled()
+  })
+})
+
+describe('assertFixSourceRepository', () => {
+  test('refuses GitHub fork pull requests without adding cross-repository push behavior', () => {
+    const project = {
+      ...makeProject(),
+      platform: 'github' as const,
+      url: 'https://github.com',
+      repo: 'org/repo',
+      repo_url: 'git@github.com:org/repo.git',
+    }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'PR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: 'contributor/repo',
+        targetBranch: 'main',
+        url: 'https://github.com/org/repo/pull/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).toThrow('GitHub fix batches require the pull request source branch to belong to org/repo')
   })
 })

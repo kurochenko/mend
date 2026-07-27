@@ -71,6 +71,7 @@ describe('executeThreadResolutions', () => {
     )
     expect(provider.resolveThread).toHaveBeenCalledWith(7, 'discussion-1')
     expect(persistReply).toHaveBeenCalledWith({
+      provider: 'gitlab',
       threadId: 'discussion-1',
       reviewRunId: 'run-2',
       reply: expect.objectContaining({ body: 'Verified as fixed in `abc`: done' }),

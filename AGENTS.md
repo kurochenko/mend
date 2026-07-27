@@ -31,7 +31,7 @@ Only MR review is implemented. Bug fix workflow, Slack integration, label-trigge
 - `src/config.ts` — loads and validates `mend.yml` project config (Zod schemas)
 - `src/server/` — GitLab and GitHub webhook handlers (`gitlab-webhook.ts`, `github-webhook.ts`, neutral event types in `webhook-events.ts`), MR review queue, evals dashboard
 - `src/server/status-note-body.ts` — persistent MR status note rendering
-- `src/server/status-note-sync.ts` — persistent MR status note sync (non-throwing GitLab upsert)
+- `src/server/status-note-sync.ts` — persistent MR status note sync (non-throwing provider note upsert)
 - `src/server/review-context.ts` — previous run lookup and SHA-level dedup helpers for update reviews
 - `src/mastra/` — Mastra instance, workflow definition, steps (setup, review, post)
 - `src/mastra/workflows/` — workflow definitions (currently `mr-review.ts`)
