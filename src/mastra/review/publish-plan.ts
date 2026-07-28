@@ -36,8 +36,9 @@ interface SummaryFindingDiscussionDraft {
 }
 
 export interface PlannedInlineDraft {
-  inlineCommentIndex: number
-  comment: ReviewInlineComment
+  source: { kind: 'inline_comment'; index: number } | { kind: 'finding'; index: number }
+  path: string
+  line: number
   fingerprint: string
   body: string
   markedBody: string
@@ -216,6 +217,28 @@ export const applyMrScopeGuard = (
 }
 
 const buildInlineCommentAnchorKey = (file: string, line: number): string => `${file}:${line}`
+
+const findFindingInlineAnchor = (
+  finding: ReviewFinding,
+  diffMap: DiffMap,
+): {
+  path: string
+  line: number
+  anchor: { old_line?: number; new_line?: number }
+} | null => {
+  for (const evidence of finding.evidence) {
+    if (evidence.type !== 'file_line') {
+      continue
+    }
+
+    const anchor = lookupPosition(diffMap, evidence.file, evidence.line)
+    if (anchor) {
+      return { path: evidence.file, line: evidence.line, anchor }
+    }
+  }
+
+  return null
+}
 
 const buildActiveMemoryAnchorKeys = (input: PostStepInput): Set<string> => {
   const keys = new Set<string>()
@@ -514,8 +537,9 @@ export const buildPostPlan = (params: {
     }
 
     inlineDrafts.push({
-      inlineCommentIndex,
-      comment,
+      source: { kind: 'inline_comment', index: inlineCommentIndex },
+      path: comment.file,
+      line: comment.line,
       fingerprint,
       body,
       markedBody: appendInlineMarkers(body, params.input.reviewRunId, comment.file, comment.line),
@@ -540,6 +564,37 @@ export const buildPostPlan = (params: {
     return false
   })
 
+  const inlineFindingFingerprints = new Set<string>()
+  const findingsToAnchor = params.input.featureFlags.structuredFindingsPost ? findings : []
+  for (const [findingIndex, finding] of findingsToAnchor.entries()) {
+    if (findingHasInlineAnchor(finding, anchoredInlineCommentKeys)) {
+      continue
+    }
+
+    const context = findFindingInlineAnchor(finding, params.diffMap)
+    if (!context) {
+      continue
+    }
+
+    const fingerprint = buildSummaryFindingThreadFingerprint(finding.id)
+    const body = formatFindingDiscussionBody(finding)
+    inlineDrafts.push({
+      source: { kind: 'finding', index: findingIndex },
+      path: context.path,
+      line: context.line,
+      fingerprint,
+      body,
+      markedBody: appendSummaryFindingMarkers(body, params.input.reviewRunId, {
+        fingerprint,
+        previousFindingId: finding.id,
+        path: context.path,
+        line: context.line,
+      }),
+      anchor: context.anchor,
+    })
+    inlineFindingFingerprints.add(fingerprint)
+  }
+
   const findingDiscussions: PlannedFindingDiscussion[] = [
     ...skippedInlineDiscussionDrafts.map((draft) => ({
       ...draft,
@@ -550,7 +605,11 @@ export const buildPostPlan = (params: {
     })),
     ...(params.input.featureFlags.structuredFindingsPost
       ? findings.flatMap((finding, index) => {
-          if (!shouldPostFindingAsDiscussion(finding, anchoredInlineCommentKeys)) {
+          const fingerprint = buildSummaryFindingThreadFingerprint(finding.id)
+          if (
+            !shouldPostFindingAsDiscussion(finding, anchoredInlineCommentKeys) ||
+            inlineFindingFingerprints.has(fingerprint)
+          ) {
             return []
           }
 
@@ -635,7 +694,7 @@ export const buildPostPlan = (params: {
 
 export const renderPostPlanDryRun = (plan: PostPlan): void => {
   for (const draft of plan.inlineDrafts) {
-    console.log(`[post/dry-run] draft note on ${draft.comment.file}:${draft.comment.line}`)
+    console.log(`[post/dry-run] draft note on ${draft.path}:${draft.line}`)
     console.log(`[post/dry-run] position: ${JSON.stringify(draft.anchor)}`)
     console.log(`[post/dry-run] body:\n${draft.markedBody}\n`)
   }

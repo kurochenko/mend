@@ -11,4 +11,4 @@ tags:
   - publishing
 ---
 
-Mend passes marked inline findings, the marked summary, and diff references through the [[review.con:review-provider]] boundary. The adapter validates provider requirements, publishes the review, and returns provider-neutral references for persistence.
+Mend resolves each finding's file-line evidence against the current diff. A finding with at least one valid changed-line anchor is published once at its first valid anchor as a native inline thread; a finding with no valid anchor uses a general discussion fallback. Mend passes the marked inline findings, marked fallback findings, the marked summary, and diff references through the [[review.con:review-provider]] boundary. The adapter validates provider requirements, publishes the review, and returns provider-neutral references for persistence.

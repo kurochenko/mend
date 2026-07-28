@@ -27,6 +27,11 @@ interface ReviewThreadsResponse {
 interface GitHubReviewThread {
   id: string
   isResolved: boolean
+  path: string
+  line: number | null
+  originalLine: number | null
+  startLine: number | null
+  diffSide: string
   comments: {
     nodes: GitHubReviewThreadComment[]
     pageInfo: { hasNextPage: boolean; endCursor: string | null }
@@ -41,11 +46,6 @@ interface GitHubReviewThreadComment {
   createdAt?: string
   updatedAt?: string
   url?: string
-  path?: string | null
-  line?: number | null
-  originalLine?: number | null
-  startLine?: number | null
-  diffSide?: string | null
 }
 
 interface ReviewThreadReplyResponse {
@@ -73,11 +73,6 @@ const reviewThreadCommentFields = `
   createdAt
   updatedAt
   url
-  path
-  line
-  originalLine
-  startLine
-  diffSide
 `
 
 const listThreadsQuery = `
@@ -88,6 +83,11 @@ const listThreadsQuery = `
           nodes {
             id
             isResolved
+            path
+            line
+            originalLine
+            startLine
+            diffSide
             comments(first: 100) {
               nodes {
                 ${reviewThreadCommentFields}
@@ -146,17 +146,16 @@ const resolveMutation = `
   }
 `
 
-const mapPosition = (comment: GitHubReviewThreadComment): ThreadPosition | null => {
-  const path = comment.path ?? null
-  const line = comment.line ?? comment.originalLine ?? null
-  if (path === null && line === null) {
+const mapPosition = (thread: GitHubReviewThread): ThreadPosition | null => {
+  const line = thread.line ?? thread.originalLine
+  if (!thread.path && line === null) {
     return null
   }
 
-  const onOldSide = comment.diffSide === 'LEFT'
+  const onOldSide = thread.diffSide === 'LEFT'
   return {
-    path,
-    oldPath: path,
+    path: thread.path,
+    oldPath: thread.path,
     line: onOldSide ? null : line,
     oldLine: onOldSide ? line : null,
   }
@@ -165,6 +164,7 @@ const mapPosition = (comment: GitHubReviewThreadComment): ThreadPosition | null 
 const mapReviewThreadMessage = (
   comment: GitHubReviewThreadComment,
   resolved: boolean,
+  position: ThreadPosition | null,
 ): ProviderThreadMessage => ({
   id: comment.databaseId === null ? comment.id : `${comment.databaseId}`,
   body: comment.body,
@@ -178,19 +178,24 @@ const mapReviewThreadMessage = (
   createdAt: comment.createdAt,
   updatedAt: comment.updatedAt,
   url: comment.url,
-  position: mapPosition(comment),
+  position,
   raw: comment,
 })
 
 const mapReviewThread = (
   thread: GitHubReviewThread,
   comments: GitHubReviewThreadComment[],
-): ProviderThread => ({
-  id: thread.id,
-  isThread: true,
-  messages: comments.map((comment) => mapReviewThreadMessage(comment, thread.isResolved)),
-  raw: thread,
-})
+): ProviderThread => {
+  const position = mapPosition(thread)
+  return {
+    id: thread.id,
+    isThread: true,
+    messages: comments.map((comment) =>
+      mapReviewThreadMessage(comment, thread.isResolved, position),
+    ),
+    raw: thread,
+  }
+}
 
 const fetchAllThreadComments = async (
   project: GitHubProjectConfig,
@@ -315,7 +320,7 @@ export const replyToThread = async (
     threadId,
     body,
   })
-  return mapReviewThreadMessage(data.addPullRequestReviewThreadReply.comment, false)
+  return mapReviewThreadMessage(data.addPullRequestReviewThreadReply.comment, false, null)
 }
 
 export const resolveThread = async (

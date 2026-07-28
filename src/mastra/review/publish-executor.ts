@@ -3,8 +3,6 @@ import { createWithReconciliation } from '@/integrations/idempotent'
 import type { ReviewProvider } from '@/integrations/provider/client'
 import type { ProviderNote, ProviderThread } from '@/integrations/provider/types'
 import { toErrorMessage } from '@/lib/errors'
-import { buildInlineThreadFingerprint } from '@/lib/review-threads'
-import { formatCommentBody } from '@/mastra/review/formatting'
 import { isCurrentRunDraft, isMendDraft, parseMendMarkers } from '@/mastra/review/markers'
 import type { PostPlan } from '@/mastra/review/publish-plan'
 import { emptyPostedThreadRef } from '@/mastra/review/publish-plan'
@@ -75,6 +73,56 @@ export interface PostExecutionResult {
   resolutionStats: ResolutionStats
 }
 
+interface PersistedPublishedThread {
+  findingFingerprint: string
+  providerThreadId: string
+  providerMessageId: string
+}
+
+export const mapPublishedInlineThreadRefs = (params: {
+  inlineDrafts: PostPlan['inlineDrafts']
+  inlineCommentCount: number
+  findingCount: number
+  persistedInlineComments: PersistedPublishedThread[]
+  persistedFindings: PersistedPublishedThread[]
+}): {
+  postedInlineComments: PostedInlineComment[]
+  postedFindings: PostedFinding[]
+} => {
+  const postedInlineComments: PostedInlineComment[] = Array.from(
+    { length: params.inlineCommentCount },
+    () => emptyPostedThreadRef(),
+  )
+  const postedFindings: PostedFinding[] = Array.from({ length: params.findingCount }, () =>
+    emptyPostedThreadRef(),
+  )
+  const persistedInlineByFingerprint = new Map(
+    params.persistedInlineComments.map((comment) => [comment.findingFingerprint, comment] as const),
+  )
+  const persistedFindingByFingerprint = new Map(
+    params.persistedFindings.map((finding) => [finding.findingFingerprint, finding] as const),
+  )
+
+  for (const draft of params.inlineDrafts) {
+    const persistedThread =
+      draft.source.kind === 'finding'
+        ? persistedFindingByFingerprint.get(draft.fingerprint)
+        : persistedInlineByFingerprint.get(draft.fingerprint)
+    const postedThread = {
+      providerThreadId: persistedThread?.providerThreadId ?? null,
+      providerMessageId: persistedThread?.providerMessageId ?? null,
+    }
+
+    if (draft.source.kind === 'finding') {
+      postedFindings[draft.source.index] = postedThread
+    } else {
+      postedInlineComments[draft.source.index] = postedThread
+    }
+  }
+
+  return { postedInlineComments, postedFindings }
+}
+
 export const executePostPlan = async (params: {
   plan: PostPlan
   project: ProjectConfig
@@ -87,10 +135,10 @@ export const executePostPlan = async (params: {
     projectKey: input.projectKey,
     reviewRunId: input.reviewRunId,
     inlineDrafts: plan.inlineDrafts.map((draft) => ({
-      path: draft.comment.file,
+      path: draft.path,
       body: draft.markedBody,
       anchor: draft.anchor,
-      logLabel: `${draft.comment.file}:${draft.comment.line}`,
+      logLabel: `${draft.path}:${draft.line}`,
     })),
     summaryBody: plan.markedSummaryBody,
     diffRefs: plan.diffRefs,
@@ -102,10 +150,10 @@ export const executePostPlan = async (params: {
     },
     matchSummaryNote: (notes) => findPublishedSummaryForRun(notes, input.reviewRunId),
   })
-  const postedInlineComments: PostedInlineComment[] = plan.inlineComments.map(() =>
+  let postedInlineComments: PostedInlineComment[] = plan.inlineComments.map(() =>
     emptyPostedThreadRef(),
   )
-  const postedFindings: PostedFinding[] = plan.findings.map(() => emptyPostedThreadRef())
+  let postedFindings: PostedFinding[] = plan.findings.map(() => emptyPostedThreadRef())
   const threadedFindings: ThreadedFinding[] = []
   const threadedInlineComments: ThreadedInlineComment[] = []
 
@@ -121,22 +169,15 @@ export const executePostPlan = async (params: {
       threads,
     })
     summaryNoteId = persisted.summaryNoteId ?? summaryNoteId
-    const persistedInlineByFingerprint = new Map(
-      persisted.inlineComments.map((comment) => [comment.findingFingerprint, comment] as const),
-    )
-
-    for (const [index, comment] of plan.inlineComments.entries()) {
-      const fingerprint = buildInlineThreadFingerprint(
-        comment.file,
-        comment.line,
-        formatCommentBody(comment),
-      )
-      const persistedComment = persistedInlineByFingerprint.get(fingerprint)
-      postedInlineComments[index] = {
-        providerThreadId: persistedComment?.providerThreadId ?? null,
-        providerMessageId: persistedComment?.providerMessageId ?? null,
-      }
-    }
+    const postedRefs = mapPublishedInlineThreadRefs({
+      inlineDrafts: plan.inlineDrafts,
+      inlineCommentCount: plan.inlineComments.length,
+      findingCount: plan.findings.length,
+      persistedInlineComments: persisted.inlineComments,
+      persistedFindings: persisted.summaryFindings,
+    })
+    postedInlineComments = postedRefs.postedInlineComments
+    postedFindings = postedRefs.postedFindings
   } catch (error) {
     console.warn(
       `[post] failed to persist published review threads locally: ${toErrorMessage(error)}`,

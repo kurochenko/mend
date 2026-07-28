@@ -61,6 +61,11 @@ describe('listThreads', () => {
                         {
                           id: 'thread-node',
                           isResolved: true,
+                          path: 'src/app.ts',
+                          line: 12,
+                          originalLine: 10,
+                          startLine: null,
+                          diffSide: 'RIGHT',
                           comments: {
                             nodes: [
                               {
@@ -71,10 +76,6 @@ describe('listThreads', () => {
                                 createdAt: '2026-01-01T00:00:00Z',
                                 updatedAt: '2026-01-01T00:00:01Z',
                                 url: 'https://github.com/org/repo/pull/1#discussion_r44',
-                                path: 'src/app.ts',
-                                line: 12,
-                                originalLine: 10,
-                                diffSide: 'RIGHT',
                               },
                             ],
                             pageInfo: { hasNextPage: false, endCursor: null },
@@ -125,52 +126,63 @@ describe('listThreads', () => {
       isThread: false,
       messages: [{ id: '55', body: 'summary', resolvable: false, position: null }],
     })
+
+    const graphqlInit = fetchMock.mock.calls[0]?.[1] as RequestInit
+    if (typeof graphqlInit.body !== 'string') {
+      throw new Error('expected GraphQL request body')
+    }
+    const query = JSON.parse(graphqlInit.body).query as string
+    const commentsStart = query.indexOf('comments(first: 100)')
+    const commentsEnd = query.indexOf('pageInfo', commentsStart)
+    expect(query.slice(0, commentsStart)).toContain('diffSide')
+    expect(query.slice(commentsStart, commentsEnd)).not.toContain('diffSide')
   })
 
   test('maps LEFT-side comments to the old file position and outdated comments to originalLine', async () => {
-    const reviewThread = (comments: Record<string, unknown>[]) => ({
+    const reviewThreads = (nodes: Record<string, unknown>[]) => ({
       data: {
         repository: {
           pullRequest: {
             reviewThreads: {
-              nodes: [
-                {
-                  id: 'thread-node',
-                  isResolved: false,
-                  comments: {
-                    nodes: comments,
-                    pageInfo: { hasNextPage: false, endCursor: null },
-                  },
-                },
-              ],
+              nodes,
               pageInfo: { hasNextPage: false, endCursor: null },
             },
           },
         },
       },
     })
-    const comment = (overrides: Record<string, unknown>) => ({
-      id: 'comment-node',
-      databaseId: 44,
+    const comment = (id: number) => ({
+      id: `comment-node-${id}`,
+      databaseId: id,
       body: 'inline',
       author: { login: 'alice', databaseId: 7 },
+    })
+    const thread = (overrides: Record<string, unknown>, id: number) => ({
+      id: `thread-node-${id}`,
+      isResolved: false,
       path: 'src/app.ts',
       ...overrides,
+      comments: {
+        nodes: [comment(id)],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      },
     })
     const fetchMock = mock()
       .mockImplementationOnce(
         async () =>
           new Response(
             JSON.stringify(
-              reviewThread([
-                comment({ line: 8, originalLine: 8, diffSide: 'LEFT' }),
-                comment({
-                  id: 'comment-node-2',
-                  databaseId: 45,
-                  line: null,
-                  originalLine: 15,
-                  diffSide: 'RIGHT',
-                }),
+              reviewThreads([
+                thread({ line: 8, originalLine: 8, startLine: null, diffSide: 'LEFT' }, 44),
+                thread(
+                  {
+                    line: null,
+                    originalLine: 15,
+                    startLine: null,
+                    diffSide: 'RIGHT',
+                  },
+                  45,
+                ),
               ]),
             ),
           ),
@@ -186,7 +198,7 @@ describe('listThreads', () => {
       line: null,
       oldLine: 8,
     })
-    expect(threads[0]?.messages[1]?.position).toEqual({
+    expect(threads[1]?.messages[0]?.position).toEqual({
       path: 'src/app.ts',
       oldPath: 'src/app.ts',
       line: 15,
@@ -218,6 +230,11 @@ describe('listThreads', () => {
                         {
                           id: 'thread-node',
                           isResolved: false,
+                          path: 'src/app.ts',
+                          line: 1,
+                          originalLine: 1,
+                          startLine: null,
+                          diffSide: 'RIGHT',
                           comments: {
                             nodes: [comment(1)],
                             pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },

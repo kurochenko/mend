@@ -276,4 +276,75 @@ describe('buildPostPlan', () => {
     expect(updateBasePlan.inlineDrafts[0]?.anchor.old_line).toBe(20)
     expect(mrBasePlan.inlineDrafts[0]?.anchor.old_line).toBe(10)
   })
+
+  it('publishes a structured finding at its first valid diff evidence line', () => {
+    const plan = buildPostPlan({
+      input: makeInput({
+        findings: [
+          finding({
+            id: 'owner-scoped-identity',
+            scope: 'cross_file',
+            evidence: [
+              { type: 'file_line', file: 'src/app.ts', line: 99 },
+              { type: 'file_line', file: 'src/app.ts', line: 2 },
+            ],
+          }),
+        ],
+      }),
+      diffRefs,
+      diffMap: mrDiff,
+      changedFiles: ['src/app.ts'],
+      reviewNumber: 1,
+      existingPublishedThreads: [],
+    })
+
+    expect(plan.inlineDrafts).toHaveLength(1)
+    expect(plan.inlineDrafts[0]).toMatchObject({
+      source: { kind: 'finding', index: 0 },
+      path: 'src/app.ts',
+      line: 2,
+      fingerprint: 'summary_finding:owner-scoped-identity',
+      anchor: { new_line: 2 },
+    })
+    expect(plan.inlineDrafts[0]?.markedBody).toContain(
+      '<!-- mend:summary-finding {"fingerprint":"summary_finding:owner-scoped-identity"',
+    )
+    expect(plan.findingDiscussions).toHaveLength(0)
+    expect(plan.diagnostics.postedInlineCount).toBe(1)
+  })
+
+  it('keeps a structured finding as a discussion when no evidence line is in the diff', () => {
+    const plan = buildPostPlan({
+      input: makeInput({
+        findings: [finding({ evidence: [{ type: 'file_line', file: 'src/app.ts', line: 99 }] })],
+      }),
+      diffRefs,
+      diffMap: mrDiff,
+      changedFiles: ['src/app.ts'],
+      reviewNumber: 1,
+      existingPublishedThreads: [],
+    })
+
+    expect(plan.inlineDrafts).toHaveLength(0)
+    expect(plan.findingDiscussions).toHaveLength(1)
+    expect(plan.findingDiscussions[0]?.previousFindingId).toBe('finding-1')
+  })
+
+  it('does not publish structured findings when structured finding posting is disabled', () => {
+    const input = makeInput({ findings: [finding()] })
+    const plan = buildPostPlan({
+      input: {
+        ...input,
+        featureFlags: { ...input.featureFlags, structuredFindingsPost: false },
+      },
+      diffRefs,
+      diffMap: mrDiff,
+      changedFiles: ['src/app.ts'],
+      reviewNumber: 1,
+      existingPublishedThreads: [],
+    })
+
+    expect(plan.inlineDrafts).toHaveLength(0)
+    expect(plan.findingDiscussions).toHaveLength(0)
+  })
 })
