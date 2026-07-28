@@ -324,7 +324,7 @@ if (!testDatabaseUrl) {
         new_line: 2,
       })
       expect(fake.state.published).toHaveLength(1)
-      expect(fake.state.published[0]?.draftNoteIds).toHaveLength(1)
+      expect(fake.state.published[0]?.draftNoteIds).toHaveLength(2)
       expect(fake.state.draftNotes).toHaveLength(0)
 
       const summaryNote = fake.state.notes.find((note) =>
