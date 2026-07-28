@@ -268,7 +268,9 @@ if (!testDatabaseUrl) {
           description: 'Exercise the review flow end to end.',
           labels: [],
           sourceBranch: gitOrigin.sourceBranch,
+          sourceProjectId: 1,
           targetBranch: gitOrigin.targetBranch,
+          targetProjectId: 1,
           webUrl: 'http://gitlab.example.invalid/test/project/-/merge_requests/42',
           sha: gitOrigin.headSha,
           diffRefs: {

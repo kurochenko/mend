@@ -11,7 +11,9 @@ interface FakeMr {
   description: string
   labels: string[]
   sourceBranch: string
+  sourceProjectId: number
   targetBranch: string
+  targetProjectId: number
   webUrl: string
   sha: string
   diffRefs: {
@@ -174,7 +176,9 @@ const toGitLabMr = (mr: FakeMr) => ({
   description: mr.description,
   labels: mr.labels,
   source_branch: mr.sourceBranch,
+  source_project_id: mr.sourceProjectId,
   target_branch: mr.targetBranch,
+  target_project_id: mr.targetProjectId,
   web_url: mr.webUrl,
   sha: mr.sha,
   diff_refs: mr.diffRefs,
