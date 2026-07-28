@@ -32,7 +32,7 @@ export interface ReviewProvider {
     threadId: string,
     body: string,
   ): Promise<ProviderThreadMessage>
-  resolveThread(changeNumber: number, threadId: string): Promise<void>
+  resolveThread(changeNumber: number, threadId: string): Promise<boolean>
   addNoteReaction(changeNumber: number, noteId: number, reaction: string): Promise<void>
   addThreadMessageReaction(changeNumber: number, messageId: number, reaction: string): Promise<void>
   publishReviewBatch(params: {

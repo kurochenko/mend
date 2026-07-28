@@ -78,7 +78,7 @@ const makeProvider = (notes: ProviderNote[] = []): ReviewProvider => {
       position: null,
       raw: {},
     })),
-    resolveThread: mock(() => Promise.resolve()),
+    resolveThread: mock(() => Promise.resolve(true)),
     addNoteReaction: mock(() => Promise.resolve()),
     addThreadMessageReaction: mock(() => Promise.resolve()),
     publishReviewBatch: mock(async () => ({

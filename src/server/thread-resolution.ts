@@ -44,9 +44,13 @@ export const executeThreadResolutions = async (params: {
       continue
     }
 
+    let providerResolved = false
     if (resolution.markResolved) {
       try {
-        await params.provider.resolveThread(params.mrIid, resolution.discussionId)
+        providerResolved = await params.provider.resolveThread(
+          params.mrIid,
+          resolution.discussionId,
+        )
       } catch (err) {
         console.warn(
           `[post] failed to resolve thread ${resolution.discussionId} after replying: ${err}`,
@@ -61,7 +65,7 @@ export const executeThreadResolutions = async (params: {
         threadId: resolution.discussionId,
         reviewRunId: params.reviewRunId,
         reply,
-        markResolved: resolution.markResolved,
+        markResolved: providerResolved,
       })
     } catch (err) {
       console.warn(
@@ -69,7 +73,7 @@ export const executeThreadResolutions = async (params: {
       )
     }
 
-    if (resolution.markResolved) {
+    if (providerResolved) {
       console.log(
         `[post] resolved thread ${resolution.discussionId} for ${resolution.previousFindingId}`,
       )

@@ -61,10 +61,16 @@ export const createPrIssueComment = async (
   number: number,
   body: string,
 ): Promise<ProviderNote> => {
-  const res = await githubApi(project, issueCommentsPath(project, number), {
-    method: 'POST',
-    body: JSON.stringify({ body }),
-  })
+  const res = await githubApi(
+    project,
+    issueCommentsPath(project, number),
+    {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    },
+    undefined,
+    { maxRetries: 0 },
+  )
   return mapIssueComment(issueCommentSchema.parse(await res.json()))
 }
 

@@ -326,11 +326,12 @@ export const replyToThread = async (
 export const resolveThread = async (
   project: GitHubProjectConfig,
   threadId: string,
-): Promise<void> => {
+): Promise<boolean> => {
   if (threadId.startsWith('note_')) {
     console.warn(`GitHub general PR comment thread ${threadId} cannot be resolved`)
-    return
+    return false
   }
 
   await githubGraphql(project, resolveMutation, { threadId })
+  return true
 }

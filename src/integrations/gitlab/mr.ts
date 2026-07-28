@@ -26,6 +26,7 @@ export interface MrDetails {
   description: string
   labels: string[]
   sourceBranch: string
+  sourceRepository: string | null
   targetBranch: string
   url: string
   sha: string
@@ -36,6 +37,8 @@ const gitlabMrSchema = z.object({
   description: z.string().nullable(),
   labels: z.array(z.string()).optional(),
   source_branch: z.string(),
+  source_project_id: z.number(),
+  target_project_id: z.number(),
   target_branch: z.string(),
   web_url: z.string(),
   sha: z.string(),
@@ -112,6 +115,8 @@ export const fetchMr = async (project: GitLabProjectConfig, mrIid: number): Prom
     description: data.description ?? '',
     labels: data.labels ?? [],
     sourceBranch: data.source_branch,
+    sourceRepository:
+      data.source_project_id === data.target_project_id ? `${project.project_id}` : null,
     targetBranch: data.target_branch,
     url: data.web_url,
     sha: data.sha,

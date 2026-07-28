@@ -297,12 +297,17 @@ const replyAndResolveTriageThread = async (params: {
     dependencies: getThreadSyncDependencies(),
   })
 
-  await params.provider.resolveThread(params.mrIid, params.thread.providerThreadId)
-  await markProviderThreadResolved({
-    provider: params.provider.kind,
-    providerThreadId: params.thread.providerThreadId,
-    dependencies: getThreadSyncDependencies(),
-  })
+  const providerResolved = await params.provider.resolveThread(
+    params.mrIid,
+    params.thread.providerThreadId,
+  )
+  if (providerResolved) {
+    await markProviderThreadResolved({
+      provider: params.provider.kind,
+      providerThreadId: params.thread.providerThreadId,
+      dependencies: getThreadSyncDependencies(),
+    })
+  }
 }
 
 const applyReviewTriageCommand = async (params: {
@@ -769,12 +774,14 @@ export const processReviewNoteEvent = async (params: {
       (thread.threadKind === 'inline' || thread.threadKind === 'summary_finding') &&
       thread.status !== 'resolved'
     ) {
-      await provider.resolveThread(mrIid, discussionId)
-      await markProviderThreadResolved({
-        provider: provider.kind,
-        providerThreadId: discussionId,
-        dependencies: getThreadSyncDependencies(),
-      })
+      const providerResolved = await provider.resolveThread(mrIid, discussionId)
+      if (providerResolved) {
+        await markProviderThreadResolved({
+          provider: provider.kind,
+          providerThreadId: discussionId,
+          dependencies: getThreadSyncDependencies(),
+        })
+      }
     }
 
     if (addSuccessReaction) {

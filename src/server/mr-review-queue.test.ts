@@ -75,7 +75,7 @@ const fakeProvider: ReviewProvider = {
       raw: {},
     }),
   ),
-  resolveThread: mock(() => Promise.resolve()),
+  resolveThread: mock(() => Promise.resolve(true)),
   addNoteReaction: mock(() => Promise.resolve()),
   addThreadMessageReaction: mock(() => Promise.resolve()),
   publishReviewBatch: mock(() =>

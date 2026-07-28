@@ -207,6 +207,7 @@ describe('ensureFixBatchRunner', () => {
             description: '',
             labels: [],
             sourceBranch: 'feature/fix',
+            sourceRepository: '123',
             targetBranch: 'main',
             url: 'https://gitlab.com/org/repo/-/merge_requests/42',
             sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -237,7 +238,7 @@ describe('ensureFixBatchRunner', () => {
             position: null,
             raw: {},
           })),
-          resolveThread: mock(async () => {}),
+          resolveThread: mock(async () => true),
           addNoteReaction: mock(async () => {}),
           addThreadMessageReaction: mock(async () => {}),
           publishReviewBatch: mock(async () => ({
@@ -292,6 +293,40 @@ describe('assertFixSourceRepository', () => {
         url: 'https://github.com/org/repo/pull/42',
         sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       }),
-    ).toThrow('GitHub fix batches require the pull request source branch to belong to org/repo')
+    ).toThrow('GitHub fix batches require the change request source branch to belong to org/repo')
+  })
+
+  test('refuses GitLab fork merge requests', () => {
+    const project = { ...makeProject(), project_id: 'org/repo' }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'MR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: null,
+        targetBranch: 'main',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).toThrow('GitLab fix batches require the change request source branch to belong to org/repo')
+  })
+
+  test('accepts same-repository GitLab merge requests', () => {
+    const project = { ...makeProject(), project_id: 'org/repo' }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'MR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: 'org/repo',
+        targetBranch: 'main',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).not.toThrow()
   })
 })

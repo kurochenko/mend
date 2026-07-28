@@ -359,8 +359,10 @@ export const createGitLabReviewProvider = (project: GitLabProjectConfig) => ({
     mapThread(await createDiscussion(project, changeNumber, body)),
   replyToThread: async (changeNumber: number, threadId: string, body: string) =>
     mapThreadMessage(await replyToDiscussion(project, changeNumber, threadId, body)),
-  resolveThread: async (changeNumber: number, threadId: string) =>
-    await resolveDiscussion(project, changeNumber, threadId),
+  resolveThread: async (changeNumber: number, threadId: string) => {
+    await resolveDiscussion(project, changeNumber, threadId)
+    return true
+  },
   addNoteReaction: async (changeNumber: number, noteId: number, reaction: string) =>
     await addMergeRequestNoteReaction(project, { mrIid: changeNumber, noteId, name: reaction }),
   addThreadMessageReaction: async (changeNumber: number, messageId: number, reaction: string) =>

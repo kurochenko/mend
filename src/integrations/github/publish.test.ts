@@ -50,6 +50,7 @@ describe('publishReviewBatch', () => {
   test('posts one inline review with right and left side anchors and summary note', async () => {
     const fetchMock = mock()
       .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('{"id":99}'))
       .mockImplementationOnce(
         async () =>
@@ -79,7 +80,7 @@ describe('publishReviewBatch', () => {
     })
 
     expect(result.summaryNoteId).toBe(100)
-    const reviewInit = fetchMock.mock.calls[1]?.[1] as RequestInit
+    const reviewInit = fetchMock.mock.calls[2]?.[1] as RequestInit
     if (typeof reviewInit.body !== 'string') {
       throw new Error('expected string request body')
     }
@@ -151,6 +152,33 @@ describe('publishReviewBatch', () => {
     ).rejects.toThrow(
       'Refusing to publish review for repo PR #1: found 1 pending review comments (0 current-run, 1 other-run, 0 foreign)',
     )
+  })
+
+  test('refuses pending reviews owned by another user', async () => {
+    const fetchMock = mock().mockImplementationOnce(
+      async () =>
+        new Response(
+          JSON.stringify([{ id: 5, state: 'PENDING', user: { id: 2, login: 'another-reviewer' } }]),
+        ),
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await expect(
+      publishReviewBatch(project, {
+        changeNumber: 1,
+        projectKey: 'repo',
+        reviewRunId: 'run-1',
+        currentUser: { id: 1, username: 'mend-bot' },
+        diffRefs: { baseSha: 'base', headSha: 'head' },
+        classifyDraft: () => 'current_run',
+        matchSummaryNote: () => undefined,
+        summaryBody: 'summary',
+        inlineDrafts: [],
+      }),
+    ).rejects.toThrow(
+      'Refusing to publish review for repo PR #1: found 1 pending review comments (0 current-run, 0 other-run, 1 foreign)',
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   test('refuses to delete unmarked empty pending reviews', async () => {
@@ -278,5 +306,74 @@ describe('publishReviewBatch', () => {
     }
     expect(`${deleteCall[0]}`).toContain('/pulls/1/reviews/5')
     expect((deleteCall[1] as RequestInit).method).toBe('DELETE')
+  })
+
+  test('reuses an already submitted inline review before creating the summary', async () => {
+    const fetchMock = mock()
+      .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(async () => new Response('[{"id":9,"body":"inline"}]'))
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: 100,
+              body: 'summary',
+              user: { id: 1, login: 'mend-bot' },
+            }),
+          ),
+      )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await publishReviewBatch(project, {
+      changeNumber: 1,
+      projectKey: 'repo',
+      reviewRunId: 'run-1',
+      currentUser: { id: 1, username: 'mend-bot' },
+      diffRefs: { baseSha: 'base', headSha: 'head' },
+      classifyDraft: () => 'current_run',
+      matchSummaryNote: () => undefined,
+      summaryBody: 'summary',
+      inlineDrafts: [
+        { path: 'src/new.ts', body: 'inline', anchor: { new_line: 5 }, logLabel: 'src/new.ts:5' },
+      ],
+    })
+
+    expect(result.summaryNoteId).toBe(100)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(`${fetchMock.mock.calls[2]?.[0]}`).toContain('/issues/1/comments')
+  })
+
+  test('reconciles an ambiguous summary create without retrying the mutation', async () => {
+    const fetchMock = mock()
+      .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(async () => new Response('temporary failure', { status: 500 }))
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify([
+              {
+                id: 100,
+                body: 'summary',
+                user: { id: 1, login: 'mend-bot' },
+              },
+            ]),
+          ),
+      )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await publishReviewBatch(project, {
+      changeNumber: 1,
+      projectKey: 'repo',
+      reviewRunId: 'run-1',
+      currentUser: { id: 1, username: 'mend-bot' },
+      diffRefs: { baseSha: 'base', headSha: 'head' },
+      classifyDraft: () => 'current_run',
+      matchSummaryNote: (notes) => notes.find((note) => note.body === 'summary'),
+      summaryBody: 'summary',
+      inlineDrafts: [],
+    })
+
+    expect(result).toMatchObject({ summaryNoteId: 100, summaryReconciled: true })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })

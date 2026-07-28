@@ -62,7 +62,7 @@ mock.module('@/integrations/provider/client', () => ({
       position: null,
       raw: {},
     })),
-    resolveThread: mock(async () => {}),
+    resolveThread: mock(async () => true),
     addNoteReaction: mock(async () => {}),
     addThreadMessageReaction: mock(async () => {}),
     publishReviewBatch: mock(async () => ({

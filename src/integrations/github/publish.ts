@@ -80,11 +80,16 @@ const classifyPendingReviews = async (params: {
   draftRecoveryAction: 'none' | 'reused' | 'cleaned'
 }> => {
   const pendingReviews = (await listReviews(params.project, params.changeNumber)).filter(
-    (review) => review.state === 'PENDING' && review.user?.id === params.currentUser.id,
+    (review) => review.state === 'PENDING',
   )
 
   const classified: DraftClassification[] = []
   for (const review of pendingReviews) {
+    if (review.user?.id !== params.currentUser.id) {
+      classified.push('foreign')
+      continue
+    }
+
     const comments = await listReviewComments(params.project, params.changeNumber, review.id)
     let classifiedPartCount = 0
     if (typeof review.body === 'string' && review.body.trim().length > 0) {
@@ -151,6 +156,14 @@ const publishInlineReview = async (params: {
 }): Promise<{ reconciled: boolean }> => {
   if (params.inlineDrafts.length === 0) {
     return { reconciled: false }
+  }
+
+  const existingComments = await listPullRequestReviewComments(params.project, params.changeNumber)
+  const alreadyPublished = params.inlineDrafts.every((draft) =>
+    existingComments.some((comment) => comment.body === draft.body),
+  )
+  if (alreadyPublished) {
+    return { reconciled: true }
   }
 
   const result = await createWithReconciliation({

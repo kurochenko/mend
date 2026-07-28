@@ -286,7 +286,7 @@ const mockCreateThread = mock<(...args: unknown[]) => Promise<ProviderThread>>((
 const mockReplyToThread = mock<(...args: unknown[]) => Promise<ProviderThreadMessage>>(() =>
   Promise.resolve(makeReplyNote()),
 )
-const mockResolveThread = mock(() => Promise.resolve())
+const mockResolveThread = mock(() => Promise.resolve(true))
 const mockAddNoteReaction = mock(() => Promise.resolve())
 const mockAddThreadMessageReaction = mock(() => Promise.resolve())
 const mockCreateReviewProvider = mock<() => ReviewProvider>(() => ({
@@ -717,7 +717,7 @@ describe('processGitlabMergeRequestNote', () => {
     mockGetThread.mockImplementation(() => Promise.resolve(makeDiscussion()))
     mockListThreads.mockImplementation(() => Promise.resolve([]))
     mockReplyToThread.mockImplementation(() => Promise.resolve(makeReplyNote()))
-    mockResolveThread.mockImplementation(() => Promise.resolve())
+    mockResolveThread.mockImplementation(() => Promise.resolve(true))
     mockAddNoteReaction.mockImplementation(() => Promise.resolve())
     mockAddThreadMessageReaction.mockImplementation(() => Promise.resolve())
     mockGetReviewThreadByProviderThreadId.mockImplementation(() => Promise.resolve(null))

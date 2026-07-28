@@ -75,12 +75,13 @@ export const assertFixSourceRepository = (
   project: ProjectConfig,
   changeRequest: ChangeRequestDetails,
 ): void => {
-  if (
-    project.platform === 'github' &&
-    changeRequest.sourceRepository?.toLowerCase() !== project.repo.toLowerCase()
-  ) {
+  const configuredRepository =
+    project.platform === 'github'
+      ? project.repo.toLowerCase()
+      : `${project.project_id}`.toLowerCase()
+  if (changeRequest.sourceRepository?.toLowerCase() !== configuredRepository) {
     throw new Error(
-      `GitHub fix batches require the pull request source branch to belong to ${project.repo}`,
+      `${project.platform === 'github' ? 'GitHub' : 'GitLab'} fix batches require the change request source branch to belong to ${configuredRepository}`,
     )
   }
 }

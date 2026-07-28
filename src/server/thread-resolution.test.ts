@@ -30,7 +30,7 @@ const makeProvider = (): ReviewProvider => ({
     position: null,
     raw: {},
   })),
-  resolveThread: mock(async () => {}),
+  resolveThread: mock(async () => true),
   addNoteReaction: mock(async () => {}),
   addThreadMessageReaction: mock(async () => {}),
   publishReviewBatch: mock(async () => ({
@@ -81,6 +81,38 @@ describe('executeThreadResolutions', () => {
       resolvedThreadCount: 1,
       partiallyFixedThreadCount: 0,
       unmatchedVerdictCount: 1,
+    })
+  })
+
+  it('keeps local state unresolved when the provider cannot resolve the thread', async () => {
+    const provider = makeProvider()
+    provider.resolveThread = mock(async () => false)
+    const persistReply = mock(async () => {})
+
+    const stats = await executeThreadResolutions({
+      provider,
+      mrIid: 7,
+      reviewRunId: 'run-2',
+      unmatchedVerdictCount: 0,
+      resolutions: [
+        {
+          previousFindingId: 'finding-1',
+          discussionId: 'note_10',
+          status: 'fixed',
+          replyBody: 'Verified as fixed',
+          markResolved: true,
+        },
+      ],
+      dependencies: { persistReply },
+    })
+
+    expect(persistReply).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'note_10', markResolved: false }),
+    )
+    expect(stats).toEqual({
+      resolvedThreadCount: 0,
+      partiallyFixedThreadCount: 1,
+      unmatchedVerdictCount: 0,
     })
   })
 })

@@ -197,6 +197,25 @@ describe('github webhook route', () => {
     expect(await res.json()).toEqual({ ok: true })
   })
 
+  test('matches configured repository names case-insensitively', async () => {
+    const configuredProject = { ...project, repo: 'ORG/REPO' }
+    const app = createGithubWebhookRoute(
+      { projects: new Map([['repo', configuredProject]]) } as unknown as AppConfig,
+      {} as Mastra,
+    )
+    const body = JSON.stringify({ zen: 'ok', repository: { id: 123, full_name: 'org/repo' } })
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: {
+        'X-GitHub-Event': 'ping',
+        'X-Hub-Signature-256': sign(body),
+      },
+      body,
+    })
+
+    expect(res.status).toBe(200)
+  })
+
   test('rejects invalid signatures', async () => {
     const body = JSON.stringify({ repository: { id: 123, full_name: 'org/repo' } })
     const res = await post(body, 'ping', 'sha256=bad')

@@ -20,6 +20,12 @@ workflow:
 stages:
   - validate
 
+default:
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends git ca-certificates
+    - rm -rf /var/lib/apt/lists/*
+
 lint:
   stage: validate
   script:
@@ -42,10 +48,6 @@ test:
         POSTGRES_DB: mend_test
         POSTGRES_USER: mend_test
         POSTGRES_PASSWORD: mend_test
-  before_script:
-    - apt-get update
-    - apt-get install -y --no-install-recommends git ca-certificates
-    - rm -rf /var/lib/apt/lists/*
   script:
     - bun install --frozen-lockfile
     - export TEST_DATABASE_URL=postgres://mend_test:mend_test@postgres:5432/mend_test
@@ -65,10 +67,6 @@ e2e:
         POSTGRES_DB: mend_test
         POSTGRES_USER: mend_test
         POSTGRES_PASSWORD: mend_test
-  before_script:
-    - apt-get update
-    - apt-get install -y --no-install-recommends git ca-certificates
-    - rm -rf /var/lib/apt/lists/*
   script:
     - bun install --frozen-lockfile
     - export TEST_DATABASE_URL=postgres://mend_test:mend_test@postgres:5432/mend_test

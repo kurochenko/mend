@@ -92,7 +92,7 @@ const findProject = (
   fullName: string,
 ): GitHubProjectConfig | null => {
   for (const project of projects.values()) {
-    if (project.platform === 'github' && project.repo === fullName) {
+    if (project.platform === 'github' && project.repo.toLowerCase() === fullName.toLowerCase()) {
       return project
     }
   }

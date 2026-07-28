@@ -279,7 +279,7 @@ describe('resolveThread', () => {
     const fetchMock = mock()
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
-    await resolveThread(project, 'note_55')
+    await expect(resolveThread(project, 'note_55')).resolves.toBe(false)
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
