@@ -147,6 +147,26 @@ const mapReviewComment = (draft: PublishInlineDraft) => ({
     : { line: draft.anchor.old_line, side: 'LEFT' }),
 })
 
+const containsAllDraftBodies = (
+  comments: Array<{ body: string }>,
+  drafts: PublishInlineDraft[],
+): boolean => {
+  const availableByBody = new Map<string, number>()
+  for (const comment of comments) {
+    availableByBody.set(comment.body, (availableByBody.get(comment.body) ?? 0) + 1)
+  }
+
+  for (const draft of drafts) {
+    const available = availableByBody.get(draft.body) ?? 0
+    if (available === 0) {
+      return false
+    }
+    availableByBody.set(draft.body, available - 1)
+  }
+
+  return true
+}
+
 const publishInlineReview = async (params: {
   project: GitHubProjectConfig
   changeNumber: number
@@ -159,9 +179,7 @@ const publishInlineReview = async (params: {
   }
 
   const existingComments = await listPullRequestReviewComments(params.project, params.changeNumber)
-  const alreadyPublished = params.inlineDrafts.every((draft) =>
-    existingComments.some((comment) => comment.body === draft.body),
-  )
+  const alreadyPublished = containsAllDraftBodies(existingComments, params.inlineDrafts)
   if (alreadyPublished) {
     return { reconciled: true }
   }
@@ -187,10 +205,7 @@ const publishInlineReview = async (params: {
       return true
     },
     list: async () => await listPullRequestReviewComments(params.project, params.changeNumber),
-    match: (comments) =>
-      params.inlineDrafts.every((draft) => comments.some((comment) => comment.body === draft.body))
-        ? true
-        : undefined,
+    match: (comments) => (containsAllDraftBodies(comments, params.inlineDrafts) ? true : undefined),
   })
 
   return { reconciled: result.reconciled }
@@ -202,6 +217,13 @@ const createSummaryNoteWithReconciliation = async (params: {
   body: string
   matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
 }): Promise<{ id: number; reconciled: boolean }> => {
+  const existing = params.matchSummaryNote(
+    await listPrIssueComments(params.project, params.changeNumber),
+  )
+  if (existing) {
+    return { id: existing.id, reconciled: true }
+  }
+
   const result = await createWithReconciliation({
     action: 'Summary note creation',
     create: async () =>
@@ -238,9 +260,7 @@ export const publishReviewBatch = async (
       diffRefs: params.diffRefs,
     })
     if (publishResult.reconciled) {
-      console.warn(
-        '[post] bulk publish returned an error but current-run inline drafts appear published; continuing',
-      )
+      console.warn('[post] re-used existing inline review after reconciliation')
     }
   }
 
@@ -252,7 +272,7 @@ export const publishReviewBatch = async (
     matchSummaryNote: params.matchSummaryNote,
   })
   if (summaryNote.reconciled) {
-    console.warn('[post] re-used existing summary note after ambiguous create failure')
+    console.warn('[post] re-used existing summary note after reconciliation')
   }
 
   return {

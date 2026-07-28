@@ -378,6 +378,9 @@ mock.module('@/db/review-findings', () => ({
   countReviewFindingsByStateForMr: mock(() =>
     Promise.resolve({ pending: 0, accepted: 0, rejected: 0, deferred: 0 }),
   ),
+  countReviewFindingSeveritiesForMr: mock(() =>
+    Promise.resolve({ bug: 0, security: 0, performance: 0, suggestion: 0 }),
+  ),
   getReviewFindingByProviderThreadId: mock(() => Promise.resolve(null)),
   upsertReviewFinding: mock(() => Promise.resolve(makeFinding())),
 }))
@@ -915,6 +918,23 @@ describe('processGitlabMergeRequestNote', () => {
       providerThreadId: 'discussion-abc',
       status: 'resolved',
     })
+  })
+
+  test('does not mark a triage thread resolved when the provider cannot resolve it', async () => {
+    const discussion = makeDiscussion({
+      messages: [makeBotNote(), makeHumanNote({ body: '@mend reject' })],
+    })
+    setupMendOwnedThread(discussion)
+    mockGetReviewFindingByThreadId.mockImplementation(() => Promise.resolve(makeFinding()))
+    mockResolveThread.mockImplementation(() => Promise.resolve(false))
+
+    const payload = makeNotePayload({ note: '@mend reject' })
+
+    await processGitlabMergeRequestNote({ project: makeProject(), payload })
+
+    expect(mockReplyToThread).toHaveBeenCalledTimes(1)
+    expect(mockResolveThread).toHaveBeenCalledWith(42, 'discussion-abc')
+    expect(mockUpdateReviewThreadStatusByProviderThreadId).not.toHaveBeenCalled()
   })
 
   test('defer command requires a reason before updating a finding', async () => {
@@ -1625,6 +1645,20 @@ describe('processGitlabMergeRequestNote', () => {
     expect(memoryCall.kind).toBe('ignore_this_mr')
 
     expect(mockAddThreadMessageReaction).toHaveBeenCalledWith(42, 999, 'white_check_mark')
+  })
+
+  test('does not mark a conversation thread resolved when the provider cannot resolve it', async () => {
+    const discussion = makeDiscussion({
+      messages: [makeBotNote(), makeHumanNote({ body: "Don't flag this again for this MR." })],
+    })
+    setupMendOwnedThread(discussion)
+    mockResolveThread.mockImplementation(() => Promise.resolve(false))
+    const payload = makeNotePayload({ note: "Don't flag this again for this MR." })
+
+    await processGitlabMergeRequestNote({ project: makeProject(), payload })
+
+    expect(mockResolveThread).toHaveBeenCalledWith(42, 'discussion-abc')
+    expect(mockUpdateReviewThreadStatusByProviderThreadId).not.toHaveBeenCalled()
   })
 
   test('resolves summary_finding thread when plan says resolveThread', async () => {

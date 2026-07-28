@@ -52,6 +52,7 @@ describe('publishReviewBatch', () => {
       .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('{"id":99}'))
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(
         async () =>
           new Response(
@@ -98,6 +99,7 @@ describe('publishReviewBatch', () => {
   test('skips review post when inline drafts are empty', async () => {
     const fetchMock = mock()
       .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(
         async () =>
           new Response(
@@ -122,8 +124,8 @@ describe('publishReviewBatch', () => {
       inlineDrafts: [],
     })
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(`${fetchMock.mock.calls[1]?.[0]}`).toContain('/issues/1/comments')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(`${fetchMock.mock.calls[2]?.[0]}`).toContain('/issues/1/comments')
   })
 
   test('refuses pending review comments from another mend run', async () => {
@@ -269,6 +271,7 @@ describe('publishReviewBatch', () => {
       )
       .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response(null, { status: 204 }))
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(
         async () =>
           new Response(
@@ -312,6 +315,7 @@ describe('publishReviewBatch', () => {
     const fetchMock = mock()
       .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('[{"id":9,"body":"inline"}]'))
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(
         async () =>
           new Response(
@@ -339,12 +343,86 @@ describe('publishReviewBatch', () => {
     })
 
     expect(result.summaryNoteId).toBe(100)
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(`${fetchMock.mock.calls[2]?.[0]}`).toContain('/issues/1/comments')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(`${fetchMock.mock.calls[3]?.[0]}`).toContain('/issues/1/comments')
+  })
+
+  test('requires one published comment for each duplicate draft body', async () => {
+    const fetchMock = mock()
+      .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(async () => new Response('[{"id":9,"body":"same"}]'))
+      .mockImplementationOnce(async () => new Response('{"id":99}'))
+      .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: 100,
+              body: 'summary',
+              user: { id: 1, login: 'mend-bot' },
+            }),
+          ),
+      )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    await publishReviewBatch(project, {
+      changeNumber: 1,
+      projectKey: 'repo',
+      reviewRunId: 'run-1',
+      currentUser: { id: 1, username: 'mend-bot' },
+      diffRefs: { baseSha: 'base', headSha: 'head' },
+      classifyDraft: () => 'current_run',
+      matchSummaryNote: () => undefined,
+      summaryBody: 'summary',
+      inlineDrafts: [
+        { path: 'src/a.ts', body: 'same', anchor: { new_line: 1 }, logLabel: 'src/a.ts:1' },
+        { path: 'src/b.ts', body: 'same', anchor: { new_line: 2 }, logLabel: 'src/b.ts:2' },
+      ],
+    })
+
+    const reviewInit = fetchMock.mock.calls[2]?.[1] as RequestInit
+    if (typeof reviewInit.body !== 'string') {
+      throw new Error('expected string request body')
+    }
+    expect(JSON.parse(reviewInit.body).comments).toHaveLength(2)
+  })
+
+  test('reuses an existing summary before creating another comment', async () => {
+    const fetchMock = mock()
+      .mockImplementationOnce(async () => new Response('[]'))
+      .mockImplementationOnce(
+        async () =>
+          new Response(
+            JSON.stringify([
+              {
+                id: 100,
+                body: 'summary',
+                user: { id: 1, login: 'mend-bot' },
+              },
+            ]),
+          ),
+      )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await publishReviewBatch(project, {
+      changeNumber: 1,
+      projectKey: 'repo',
+      reviewRunId: 'run-1',
+      currentUser: { id: 1, username: 'mend-bot' },
+      diffRefs: { baseSha: 'base', headSha: 'head' },
+      classifyDraft: () => 'current_run',
+      matchSummaryNote: (notes) => notes.find((note) => note.body === 'summary'),
+      summaryBody: 'summary',
+      inlineDrafts: [],
+    })
+
+    expect(result).toMatchObject({ summaryNoteId: 100, summaryReconciled: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   test('reconciles an ambiguous summary create without retrying the mutation', async () => {
     const fetchMock = mock()
+      .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('[]'))
       .mockImplementationOnce(async () => new Response('temporary failure', { status: 500 }))
       .mockImplementationOnce(
@@ -374,6 +452,6 @@ describe('publishReviewBatch', () => {
     })
 
     expect(result).toMatchObject({ summaryNoteId: 100, summaryReconciled: true })
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 })
