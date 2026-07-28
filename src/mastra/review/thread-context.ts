@@ -1,35 +1,10 @@
-import type { Discussion, DiscussionNote } from '@/integrations/gitlab/discussions'
+import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
 import {
   buildInlineThreadFingerprintFromHash,
   type ReviewSubjectType,
   type ReviewThreadKind,
 } from '@/lib/review-threads'
 import { parseMendMarkers } from '@/mastra/review/markers'
-
-const readPositionString = (position: unknown, key: 'new_path' | 'old_path'): string | null => {
-  if (!position || typeof position !== 'object') {
-    return null
-  }
-
-  const value = (position as Record<string, unknown>)[key]
-  return typeof value === 'string' && value.length > 0 ? value : null
-}
-
-const readPositionLine = (position: unknown): number | null => {
-  if (!position || typeof position !== 'object') {
-    return null
-  }
-
-  const record = position as Record<string, unknown>
-  for (const key of ['new_line', 'old_line']) {
-    const value = record[key]
-    if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
-      return value
-    }
-  }
-
-  return null
-}
 
 export interface ReviewThreadContext {
   threadKind: ReviewThreadKind
@@ -39,31 +14,31 @@ export interface ReviewThreadContext {
   findingFingerprint: string | null
 }
 
-export interface PersistableGitLabDiscussion {
-  discussion: Discussion
-  firstNote: DiscussionNote
+export interface PersistableThread {
+  thread: ProviderThread
+  firstNote: ProviderThreadMessage
   firstNoteRunId: string | null
   context: ReviewThreadContext
 }
 
-export const findLatestHumanReply = (discussion: Discussion): DiscussionNote | null => {
-  const firstNote = discussion.notes[0]
+export const findLatestHumanReply = (thread: ProviderThread): ProviderThreadMessage | null => {
+  const firstNote = thread.messages[0]
   if (!firstNote) {
     return null
   }
 
-  for (let index = discussion.notes.length - 1; index > 0; index--) {
-    const note = discussion.notes[index]
-    if (note && note.system !== true && note.author.id !== firstNote.author.id) {
-      return note
+  for (let index = thread.messages.length - 1; index > 0; index--) {
+    const message = thread.messages[index]
+    if (message && message.system !== true && message.author.id !== firstNote.author.id) {
+      return message
     }
   }
 
   return null
 }
 
-export const deriveThreadContext = (discussion: Discussion): ReviewThreadContext => {
-  const firstNote = discussion.notes[0]
+export const deriveThreadContext = (thread: ProviderThread): ReviewThreadContext => {
+  const firstNote = thread.messages[0]
   if (!firstNote) {
     return {
       threadKind: 'conversation',
@@ -109,14 +84,12 @@ export const deriveThreadContext = (discussion: Discussion): ReviewThreadContext
       subjectType: 'general',
       path: null,
       line: null,
-      findingFingerprint: `summary:${discussion.id}`,
+      findingFingerprint: `summary:${thread.id}`,
     }
   }
 
-  const path =
-    readPositionString(firstNote.position, 'new_path') ??
-    readPositionString(firstNote.position, 'old_path')
-  const line = readPositionLine(firstNote.position)
+  const path = firstNote.position?.path ?? firstNote.position?.oldPath ?? null
+  const line = firstNote.position?.line ?? firstNote.position?.oldLine ?? null
   if (path) {
     return {
       threadKind: 'inline',
@@ -136,8 +109,8 @@ export const deriveThreadContext = (discussion: Discussion): ReviewThreadContext
   }
 }
 
-export const getDiscussionStatus = (discussion: Discussion): 'open' | 'resolved' => {
-  const firstNote = discussion.notes[0]
+export const getThreadStatus = (thread: ProviderThread): 'open' | 'resolved' => {
+  const firstNote = thread.messages[0]
   if (!firstNote?.resolvable) {
     return 'open'
   }
@@ -145,14 +118,14 @@ export const getDiscussionStatus = (discussion: Discussion): 'open' | 'resolved'
   return firstNote.resolved ? 'resolved' : 'open'
 }
 
-export const collectPersistableGitLabDiscussions = (
-  discussions: Discussion[],
+export const collectPersistableThreads = (
+  threads: ProviderThread[],
   reviewRunId?: string,
-): PersistableGitLabDiscussion[] => {
-  const out: PersistableGitLabDiscussion[] = []
+): PersistableThread[] => {
+  const out: PersistableThread[] = []
 
-  for (const discussion of discussions) {
-    const firstNote = discussion.notes[0]
+  for (const thread of threads) {
+    const firstNote = thread.messages[0]
     if (!firstNote) {
       continue
     }
@@ -162,7 +135,7 @@ export const collectPersistableGitLabDiscussions = (
       continue
     }
 
-    const context = deriveThreadContext(discussion)
+    const context = deriveThreadContext(thread)
     if (
       context.threadKind !== 'inline' &&
       context.threadKind !== 'summary_finding' &&
@@ -172,7 +145,7 @@ export const collectPersistableGitLabDiscussions = (
     }
 
     out.push({
-      discussion,
+      thread,
       firstNote,
       firstNoteRunId: markers.runId ?? null,
       context,

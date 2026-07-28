@@ -12,7 +12,8 @@ import { listReviewFindingsForMr } from '@/db/review-findings'
 import { getServiceRuntimeMode } from '@/db/service-runtime'
 import { createFixWorkspaceProvider } from '@/fix-workspaces/factory'
 import type { PreparedFixWorkspace } from '@/fix-workspaces/types'
-import { fetchMr } from '@/integrations/gitlab/mr'
+import { createReviewProvider } from '@/integrations/provider/client'
+import type { ChangeRequestDetails } from '@/integrations/provider/types'
 import { createWorktree, ensureClone, removeWorktree } from '@/integrations/repo'
 import { toErrorMessage } from '@/lib/errors'
 import { completeFixBatch } from '@/mastra/fix/commit-push'
@@ -36,7 +37,7 @@ interface FixBatchRunnerDependencies {
   getReviewQueueRecord: typeof getReviewQueueRecord
   listReviewFindingsForMr: typeof listReviewFindingsForMr
   createFixWorkspaceProvider: typeof createFixWorkspaceProvider
-  fetchMr: typeof fetchMr
+  createReviewProvider: typeof createReviewProvider
   ensureClone: typeof ensureClone
   createWorktree: typeof createWorktree
   removeWorktree: typeof removeWorktree
@@ -57,7 +58,7 @@ const defaultDependencies: FixBatchRunnerDependencies = {
   getReviewQueueRecord,
   listReviewFindingsForMr,
   createFixWorkspaceProvider,
-  fetchMr,
+  createReviewProvider,
   ensureClone,
   createWorktree,
   removeWorktree,
@@ -69,6 +70,21 @@ const defaultDependencies: FixBatchRunnerDependencies = {
 
 const isDraining = async (dependencies: FixBatchRunnerDependencies): Promise<boolean> =>
   (await dependencies.getServiceRuntimeMode()) === 'draining'
+
+export const assertFixSourceRepository = (
+  project: ProjectConfig,
+  changeRequest: ChangeRequestDetails,
+): void => {
+  const configuredRepository =
+    project.platform === 'github'
+      ? project.repo.toLowerCase()
+      : `${project.project_id}`.toLowerCase()
+  if (changeRequest.sourceRepository?.toLowerCase() !== configuredRepository) {
+    throw new Error(
+      `${project.platform === 'github' ? 'GitHub' : 'GitLab'} fix batches require the change request source branch to belong to ${configuredRepository}`,
+    )
+  }
+}
 
 const runFixBatch = async (params: {
   mastra: Mastra
@@ -86,7 +102,9 @@ const runFixBatch = async (params: {
       mrIid: batch.mrIid,
       maxLoops: project.review.fix.max_loops,
     })
-    const mr = await dependencies.fetchMr(project, batch.mrIid)
+    const provider = dependencies.createReviewProvider(project)
+    const mr = await provider.fetchChangeRequest(batch.mrIid)
+    assertFixSourceRepository(project, mr)
 
     await dependencies.ensureClone(project)
     const worktreePath = await dependencies.createWorktree(

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, ProjectConfig } from '@/config'
 import type { ReviewQueueJob, ReviewQueueRecord } from '@/db/review-queue'
-import type { GitLabClient } from '@/integrations/gitlab/client'
+import type { ReviewProvider } from '@/integrations/provider/client'
 import type { MrReviewRequestEvent } from '@/lib/review-events'
 import type { executeMrReview as executeMrReviewFunction } from '@/mastra/run-mr-review'
 import type { syncStatusNote } from '@/server/status-note-sync'
@@ -26,17 +26,7 @@ const mockSetRunningCommitSha = mock(() => Promise.resolve())
 const mockUpdateReviewRunResult = mock(() => Promise.resolve())
 
 const mockGetServiceRuntimeMode = mock(() => Promise.resolve<'running' | 'draining'>('running'))
-const mockFetchMrDiffRefs = mock(() =>
-  Promise.resolve({
-    diffRefs: {
-      base_sha: 'base',
-      head_sha: 'head',
-      start_sha: 'start',
-    },
-  }),
-)
-const mockFetchMrChangedFiles = mock(() => Promise.resolve({ files: ['src/app.ts'] }))
-const mockFetchMr = mock(() =>
+const mockFetchChangeRequest = mock(() =>
   Promise.resolve({
     sha: 'abc123',
     title: '',
@@ -56,33 +46,49 @@ const mockExecuteMrReview = mock<typeof executeMrReviewFunction>(() =>
     workflowResult: { status: 'success', result: {}, input: {}, steps: {} },
   }),
 )
-const fakeGitLabClient: GitLabClient = {
+const fakeProvider: ReviewProvider = {
+  kind: 'gitlab',
   fetchCurrentUser: mock(() => Promise.resolve({ id: 100, username: 'mend-bot' })),
-  listMrNotes: mock(() => Promise.resolve([])),
-  listMrDraftNotes: mock(() => Promise.resolve([])),
-  createDraftNote: mock(() => Promise.resolve({ id: 1 })),
-  deleteDraftNote: mock(() => Promise.resolve()),
-  publishDraftNote: mock(() => Promise.resolve()),
-  bulkPublishDrafts: mock(() => Promise.resolve()),
-  createMrNote: mock(() => Promise.resolve({ id: 1, body: '', author: null })),
-  updateMrNote: mock(() => Promise.resolve({ id: 1, body: '', author: null })),
-  deleteMrNote: mock(() => Promise.resolve()),
-  listMrDiscussions: mock(() => Promise.resolve([])),
-  createDiscussion: mock(() =>
-    Promise.resolve({ id: 'discussion-1', individual_note: false, notes: [], raw: {} }),
+  fetchChangeRequest: mockFetchChangeRequest,
+  fetchDiffRefs: mock(() =>
+    Promise.resolve({ baseSha: 'base', headSha: 'head', startSha: 'start' }),
   ),
-  replyToDiscussion: mock(() =>
+  fetchChangedFiles: mock(() => Promise.resolve(['src/app.ts'])),
+  listNotes: mock(() => Promise.resolve([])),
+  createNote: mock(() => Promise.resolve({ id: 1, body: '', author: null })),
+  updateNote: mock(() => Promise.resolve({ id: 1, body: '', author: null })),
+  deleteNote: mock(() => Promise.resolve()),
+  listThreads: mock(() => Promise.resolve([])),
+  getThread: mock(() =>
+    Promise.resolve({ id: 'discussion-1', isThread: true, messages: [], raw: {} }),
+  ),
+  createThread: mock(() =>
+    Promise.resolve({ id: 'discussion-1', isThread: true, messages: [], raw: {} }),
+  ),
+  replyToThread: mock(() =>
     Promise.resolve({
-      id: 1,
+      id: '1',
       body: '',
       author: { id: 100, username: 'mend-bot', raw: {} },
       resolvable: false,
+      position: null,
       raw: {},
     }),
   ),
-  resolveDiscussion: mock(() => Promise.resolve()),
+  resolveThread: mock(() => Promise.resolve(true)),
+  addNoteReaction: mock(() => Promise.resolve()),
+  addThreadMessageReaction: mock(() => Promise.resolve()),
+  publishReviewBatch: mock(() =>
+    Promise.resolve({
+      preExistingDraftCount: 0,
+      recoveredDraftCount: 0,
+      draftRecoveryAction: 'none' as const,
+      summaryNoteId: 1,
+      summaryReconciled: false,
+    }),
+  ),
 }
-const mockCreateGitLabClient = mock(() => fakeGitLabClient)
+const mockCreateReviewProvider = mock(() => fakeProvider)
 const mockSyncStatusNote = mock<typeof syncStatusNote>(() => Promise.resolve(true))
 
 mock.module('@/db/review-queue', () => ({
@@ -99,52 +105,6 @@ mock.module('@/db/review-queue', () => ({
 
 mock.module('@/db/service-runtime', () => ({
   getServiceRuntimeMode: mockGetServiceRuntimeMode,
-}))
-
-mock.module('@/integrations/gitlab/mr', () => ({
-  fetchMrDiffRefs: mockFetchMrDiffRefs,
-  fetchMrChangedFiles: mockFetchMrChangedFiles,
-  fetchMr: mockFetchMr,
-}))
-
-mock.module('@/integrations/gitlab/notes', () => ({
-  createDraftNote: mock(() => Promise.resolve({ id: 1 })),
-  bulkPublishDrafts: mock(() => Promise.resolve()),
-  publishDraftNote: mock(() => Promise.resolve()),
-  listMrDraftNotes: mock(() => Promise.resolve([])),
-  deleteDraftNote: mock(() => Promise.resolve()),
-  fetchCurrentUser: fakeGitLabClient.fetchCurrentUser,
-  listMrNotes: mock((_project: ProjectConfig, mrIid: number) =>
-    fakeGitLabClient.listMrNotes(mrIid),
-  ),
-  createMrNote: mock((_project: ProjectConfig, mrIid: number, body: string) =>
-    fakeGitLabClient.createMrNote(mrIid, body),
-  ),
-  deleteMrNote: mock((_project: ProjectConfig, mrIid: number, noteId: number) =>
-    fakeGitLabClient.deleteMrNote(mrIid, noteId),
-  ),
-  updateMrNote: mock((_project: ProjectConfig, mrIid: number, noteId: number, body: string) =>
-    fakeGitLabClient.updateMrNote(mrIid, noteId, body),
-  ),
-}))
-
-mock.module('@/integrations/gitlab/discussions', () => ({
-  getMrDiscussion: mock(() =>
-    Promise.resolve({ id: 'discussion-1', individual_note: false, notes: [], raw: {} }),
-  ),
-  listMrDiscussions: mock((_project: ProjectConfig, mrIid: number) =>
-    fakeGitLabClient.listMrDiscussions(mrIid),
-  ),
-  createDiscussion: mock((_project: ProjectConfig, mrIid: number, body: string) =>
-    fakeGitLabClient.createDiscussion(mrIid, body),
-  ),
-  replyToDiscussion: mock(
-    (_project: ProjectConfig, mrIid: number, discussionId: string, body: string) =>
-      fakeGitLabClient.replyToDiscussion(mrIid, discussionId, body),
-  ),
-  resolveDiscussion: mock((_project: ProjectConfig, mrIid: number, discussionId: string) =>
-    fakeGitLabClient.resolveDiscussion(mrIid, discussionId),
-  ),
 }))
 
 mock.module('@/server/review-context', () => ({
@@ -239,6 +199,15 @@ const makePayload = (sha = 'abc123'): unknown => ({
   },
 })
 
+const makeGithubPayload = (sha = 'abc123'): unknown => ({
+  action: 'synchronize',
+  pull_request: {
+    head: {
+      sha,
+    },
+  },
+})
+
 const makeQueueRecord = (overrides: Partial<ReviewQueueRecord> = {}): ReviewQueueRecord => ({
   id: 'test-project:42',
   projectKey: 'test-project',
@@ -293,11 +262,10 @@ const queueDependencies = (): Parameters<typeof enqueueMrReview>[0]['dependencie
   setRunningCommitSha: mockSetRunningCommitSha,
   upsertPendingReviewRequest: mockUpsertPendingReviewRequest,
   getServiceRuntimeMode: mockGetServiceRuntimeMode,
-  fetchMr: mockFetchMr,
+  createReviewProvider: mockCreateReviewProvider,
   hasSuccessfulRunForSha: mockHasSuccessfulRunForSha,
   getLatestSuccessfulRun: mockGetLatestSuccessfulRun,
   executeMrReview: mockExecuteMrReview,
-  createGitLabClient: mockCreateGitLabClient,
   syncStatusNote: mockSyncStatusNote,
   updateReviewRunResult: mockUpdateReviewRunResult,
 })
@@ -314,13 +282,11 @@ beforeEach(() => {
   mockSetRunningCommitSha.mockReset()
   mockUpdateReviewRunResult.mockReset()
   mockGetServiceRuntimeMode.mockReset()
-  mockFetchMrDiffRefs.mockReset()
-  mockFetchMrChangedFiles.mockReset()
-  mockFetchMr.mockReset()
+  mockFetchChangeRequest.mockReset()
   mockHasSuccessfulRunForSha.mockReset()
   mockGetLatestSuccessfulRun.mockReset()
   mockExecuteMrReview.mockReset()
-  mockCreateGitLabClient.mockReset()
+  mockCreateReviewProvider.mockReset()
   mockSyncStatusNote.mockReset()
 
   mockUpsertPendingReviewRequest.mockImplementation(async ({ event, payload }) =>
@@ -336,17 +302,7 @@ beforeEach(() => {
   mockSetRunningCommitSha.mockImplementation(() => Promise.resolve())
   mockUpdateReviewRunResult.mockImplementation(() => Promise.resolve())
   mockGetServiceRuntimeMode.mockImplementation(() => Promise.resolve('running'))
-  mockFetchMrDiffRefs.mockImplementation(() =>
-    Promise.resolve({
-      diffRefs: {
-        base_sha: 'base',
-        head_sha: 'head',
-        start_sha: 'start',
-      },
-    }),
-  )
-  mockFetchMrChangedFiles.mockImplementation(() => Promise.resolve({ files: ['src/app.ts'] }))
-  mockFetchMr.mockImplementation(() =>
+  mockFetchChangeRequest.mockImplementation(() =>
     Promise.resolve({
       sha: 'abc123',
       title: '',
@@ -366,7 +322,7 @@ beforeEach(() => {
       workflowResult: { status: 'success', result: {}, input: {}, steps: {} },
     }),
   )
-  mockCreateGitLabClient.mockImplementation(() => fakeGitLabClient)
+  mockCreateReviewProvider.mockImplementation(() => fakeProvider)
   mockSyncStatusNote.mockImplementation(() => Promise.resolve(true))
 })
 
@@ -409,6 +365,17 @@ describe('enqueueMrReview', () => {
     })
 
     expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'abc123')
+  })
+
+  test('pins GitHub pending work to the webhook head SHA', async () => {
+    await enqueueReview({
+      mastra: makeMastra(),
+      project: makeProject(),
+      payload: makeGithubPayload('def456'),
+      event: makeEvent(),
+    })
+
+    expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'def456')
   })
 
   test('newer webhook keeps status running when a review is already running', async () => {

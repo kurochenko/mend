@@ -1,16 +1,13 @@
 import { toErrorMessage } from '@/lib/errors'
 import { assertSafeGitRef, execGit } from '@/lib/exec'
+import type { DiffRefs } from '@/integrations/provider/types'
 
 export type DiffBaseParams = {
   worktreePath: string
   reviewMode: 'initial' | 'update'
   previousReviewedSha: string | null
   targetBranch: string
-  diffRefs: {
-    base_sha: string
-    head_sha: string
-    start_sha: string
-  }
+  diffRefs: DiffRefs
 }
 
 export type DiffBaseResult = {
@@ -80,8 +77,8 @@ const sanitizeCandidates = (refs: string[]): { valid: string[]; warnings: string
 
 export const resolveDiffBaseRef = async (params: DiffBaseParams): Promise<DiffBaseResult> => {
   const rawCandidates = dedupeRefs([
-    params.diffRefs.start_sha,
-    params.diffRefs.base_sha,
+    ...(params.diffRefs.startSha ? [params.diffRefs.startSha] : []),
+    params.diffRefs.baseSha,
     params.targetBranch,
   ])
   const { valid: candidates, warnings } = sanitizeCandidates(rawCandidates)
@@ -90,7 +87,7 @@ export const resolveDiffBaseRef = async (params: DiffBaseParams): Promise<DiffBa
     const previousReviewedSha = params.previousReviewedSha
     try {
       const safePreviousReviewedSha = assertSafeGitRef(previousReviewedSha, 'previous reviewed SHA')
-      const safeHeadSha = assertSafeGitRef(params.diffRefs.head_sha, 'MR head SHA')
+      const safeHeadSha = assertSafeGitRef(params.diffRefs.headSha, 'MR head SHA')
 
       if (await isAncestor(params.worktreePath, safePreviousReviewedSha, safeHeadSha)) {
         candidates.unshift(safePreviousReviewedSha)

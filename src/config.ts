@@ -214,12 +214,10 @@ const reviewSchema = z.object({
   fix: reviewFixSchema,
 })
 
-const projectSchema = z.object({
-  platform: z.enum(['gitlab']),
+const sharedProjectSchema = z.object({
   url: z.string().url(),
   token: z.string().min(1),
   webhook_secret: z.string().min(1),
-  project_id: z.union([z.number().int().positive(), z.string().min(1)]),
   repo_url: z.string().min(1),
   default_branch: z.string().default('main'),
   trigger: triggerSchema.default({ mode: 'ready' }),
@@ -227,10 +225,30 @@ const projectSchema = z.object({
   tools: toolsSchema,
 })
 
-export type ProjectConfig = z.infer<typeof projectSchema> & {
+const gitlabProjectSchema = sharedProjectSchema.extend({
+  platform: z.literal('gitlab'),
+  project_id: z.union([z.number().int().positive(), z.string().min(1)]),
+})
+
+const githubProjectSchema = sharedProjectSchema.extend({
+  platform: z.literal('github'),
+  url: z.string().url().default('https://github.com'),
+  repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'repo must match owner/name'),
+})
+
+const projectSchema = z.discriminatedUnion('platform', [gitlabProjectSchema, githubProjectSchema])
+
+export type GitLabProjectConfig = z.infer<typeof gitlabProjectSchema> & {
   key: string
   clone_path: string
 }
+
+export type GitHubProjectConfig = z.infer<typeof githubProjectSchema> & {
+  key: string
+  clone_path: string
+}
+
+export type ProjectConfig = GitLabProjectConfig | GitHubProjectConfig
 
 const improvementsAgentSchema = z.preprocess(
   (value) => value ?? {},

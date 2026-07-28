@@ -10,6 +10,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
+import type { ReviewProvider } from '@/lib/review-threads'
 
 export const reviewRunStatusEnum = pgEnum('review_run_status', ['running', 'success', 'failed'])
 export const serviceRuntimeModeEnum = pgEnum('service_runtime_mode', ['running', 'draining'])
@@ -136,7 +137,7 @@ export const reviewThreads = pgTable(
   'review_threads',
   {
     id: text('id').primaryKey(),
-    provider: text('provider').notNull(),
+    provider: text('provider').$type<ReviewProvider>().notNull(),
     projectKey: text('project_key').notNull(),
     repoExternalId: text('repo_external_id').notNull(),
     reviewExternalId: integer('review_external_id').notNull(),
@@ -172,7 +173,7 @@ export const reviewMessages = pgTable(
     threadId: text('thread_id')
       .notNull()
       .references(() => reviewThreads.id, { onDelete: 'cascade' }),
-    provider: text('provider').notNull(),
+    provider: text('provider').$type<ReviewProvider>().notNull(),
     reviewRunId: text('review_run_id'),
     authorType: text('author_type').notNull(),
     authorExternalId: text('author_external_id'),
@@ -211,7 +212,7 @@ export const reviewFindings = pgTable(
     threadId: text('thread_id')
       .notNull()
       .references(() => reviewThreads.id, { onDelete: 'cascade' }),
-    provider: text('provider').notNull(),
+    provider: text('provider').$type<ReviewProvider>().notNull(),
     providerThreadId: text('provider_thread_id').notNull(),
     providerNoteId: text('provider_note_id'),
     state: reviewFindingStateEnum('state').notNull(),

@@ -1,42 +1,54 @@
 import { describe, expect, it, mock } from 'bun:test'
-import type { GitLabClient } from '@/integrations/gitlab/client'
+import type { ReviewProvider } from '@/integrations/provider/client'
 import { executeThreadResolutions } from '@/server/thread-resolution'
 
-const makeGitLab = (): GitLabClient => ({
+const makeProvider = (): ReviewProvider => ({
+  kind: 'gitlab',
   fetchCurrentUser: mock(async () => ({ id: 1, username: 'mend-bot' })),
-  listMrNotes: mock(async () => []),
-  listMrDraftNotes: mock(async () => []),
-  createDraftNote: mock(async () => ({ id: 1 })),
-  deleteDraftNote: mock(async () => {}),
-  publishDraftNote: mock(async () => {}),
-  bulkPublishDrafts: mock(async () => {}),
-  createMrNote: mock(async () => ({ id: 1, body: '', author: null })),
-  updateMrNote: mock(async () => ({ id: 1, body: '', author: null })),
-  deleteMrNote: mock(async () => {}),
-  listMrDiscussions: mock(async () => []),
-  createDiscussion: mock(async () => ({
+  fetchChangeRequest: mock(async () => {
+    throw new Error('unused')
+  }),
+  fetchDiffRefs: mock(async () => ({ baseSha: 'base', headSha: 'head', startSha: 'start' })),
+  fetchChangedFiles: mock(async () => []),
+  listNotes: mock(async () => []),
+  createNote: mock(async () => ({ id: 1, body: '', author: null })),
+  updateNote: mock(async () => ({ id: 1, body: '', author: null })),
+  deleteNote: mock(async () => {}),
+  listThreads: mock(async () => []),
+  getThread: mock(async () => ({
     id: 'discussion-1',
-    individual_note: false,
-    notes: [],
+    isThread: true,
+    messages: [],
     raw: {},
   })),
-  replyToDiscussion: mock(async (_mrIid: number, _discussionId: string, body: string) => ({
-    id: 10,
+  createThread: mock(async () => ({ id: 'discussion-1', isThread: true, messages: [], raw: {} })),
+  replyToThread: mock(async (_mrIid: number, _discussionId: string, body: string) => ({
+    id: '10',
     body,
     author: { id: 1, username: 'mend-bot', raw: {} },
     resolvable: false,
+    position: null,
     raw: {},
   })),
-  resolveDiscussion: mock(async () => {}),
+  resolveThread: mock(async () => true),
+  addNoteReaction: mock(async () => {}),
+  addThreadMessageReaction: mock(async () => {}),
+  publishReviewBatch: mock(async () => ({
+    preExistingDraftCount: 0,
+    recoveredDraftCount: 0,
+    draftRecoveryAction: 'none' as const,
+    summaryNoteId: 1,
+    summaryReconciled: false,
+  })),
 })
 
 describe('executeThreadResolutions', () => {
   it('replies, resolves fixed threads, and persists the outbound reply', async () => {
-    const gitlab = makeGitLab()
+    const provider = makeProvider()
     const persistReply = mock(async () => {})
 
     const stats = await executeThreadResolutions({
-      gitlab,
+      provider,
       mrIid: 7,
       reviewRunId: 'run-2',
       unmatchedVerdictCount: 1,
@@ -52,14 +64,15 @@ describe('executeThreadResolutions', () => {
       dependencies: { persistReply },
     })
 
-    expect(gitlab.replyToDiscussion).toHaveBeenCalledWith(
+    expect(provider.replyToThread).toHaveBeenCalledWith(
       7,
       'discussion-1',
       'Verified as fixed in `abc`: done',
     )
-    expect(gitlab.resolveDiscussion).toHaveBeenCalledWith(7, 'discussion-1')
+    expect(provider.resolveThread).toHaveBeenCalledWith(7, 'discussion-1')
     expect(persistReply).toHaveBeenCalledWith({
-      discussionId: 'discussion-1',
+      provider: 'gitlab',
+      threadId: 'discussion-1',
       reviewRunId: 'run-2',
       reply: expect.objectContaining({ body: 'Verified as fixed in `abc`: done' }),
       markResolved: true,
@@ -68,6 +81,38 @@ describe('executeThreadResolutions', () => {
       resolvedThreadCount: 1,
       partiallyFixedThreadCount: 0,
       unmatchedVerdictCount: 1,
+    })
+  })
+
+  it('keeps local state unresolved when the provider cannot resolve the thread', async () => {
+    const provider = makeProvider()
+    provider.resolveThread = mock(async () => false)
+    const persistReply = mock(async () => {})
+
+    const stats = await executeThreadResolutions({
+      provider,
+      mrIid: 7,
+      reviewRunId: 'run-2',
+      unmatchedVerdictCount: 0,
+      resolutions: [
+        {
+          previousFindingId: 'finding-1',
+          discussionId: 'note_10',
+          status: 'fixed',
+          replyBody: 'Verified as fixed',
+          markResolved: true,
+        },
+      ],
+      dependencies: { persistReply },
+    })
+
+    expect(persistReply).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'note_10', markResolved: false }),
+    )
+    expect(stats).toEqual({
+      resolvedThreadCount: 0,
+      partiallyFixedThreadCount: 1,
+      unmatchedVerdictCount: 0,
     })
   })
 })

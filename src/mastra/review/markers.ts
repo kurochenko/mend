@@ -1,6 +1,6 @@
 import { hashBody } from '@/lib/hash'
+import { buildDraftRunMarker, hasDraftRunMarker } from '@/lib/review-draft-marker'
 
-const DRAFT_RUN_MARKER_PREFIX = '<!-- mend:draft-run:'
 const SUMMARY_MARKER = '<!-- mend:summary -->'
 const INLINE_MARKER_PREFIX = '<!-- mend:inline:'
 const SUMMARY_FINDING_MARKER_PREFIX = '<!-- mend:summary-finding '
@@ -16,9 +16,6 @@ export interface SummaryFindingMarker {
   line?: number
 }
 
-const buildDraftRunMarker = (reviewRunId: string): string =>
-  `${DRAFT_RUN_MARKER_PREFIX}${reviewRunId} -->`
-
 const buildInlineMarker = (file: string, line: number, bodyHash: string): string =>
   `${INLINE_MARKER_PREFIX}${file}:${line}:${bodyHash} -->`
 
@@ -28,7 +25,7 @@ const buildSummaryFindingMarker = (marker: SummaryFindingMarker): string =>
 export const isCurrentRunDraft = (body: string, reviewRunId: string): boolean =>
   body.includes(buildDraftRunMarker(reviewRunId))
 
-export const isMendDraft = (body: string): boolean => body.includes(DRAFT_RUN_MARKER_PREFIX)
+export const isMendDraft = (body: string): boolean => hasDraftRunMarker(body)
 
 export const appendInlineMarkers = (
   body: string,

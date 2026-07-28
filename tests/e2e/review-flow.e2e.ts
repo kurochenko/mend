@@ -268,7 +268,9 @@ if (!testDatabaseUrl) {
           description: 'Exercise the review flow end to end.',
           labels: [],
           sourceBranch: gitOrigin.sourceBranch,
+          sourceProjectId: 1,
           targetBranch: gitOrigin.targetBranch,
+          targetProjectId: 1,
           webUrl: 'http://gitlab.example.invalid/test/project/-/merge_requests/42',
           sha: gitOrigin.headSha,
           diffRefs: {
@@ -322,7 +324,7 @@ if (!testDatabaseUrl) {
         new_line: 2,
       })
       expect(fake.state.published).toHaveLength(1)
-      expect(fake.state.published[0]?.draftNoteIds).toHaveLength(1)
+      expect(fake.state.published[0]?.draftNoteIds).toHaveLength(2)
       expect(fake.state.draftNotes).toHaveLength(0)
 
       const summaryNote = fake.state.notes.find((note) =>

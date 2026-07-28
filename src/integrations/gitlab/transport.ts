@@ -1,4 +1,5 @@
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
+import { ProviderApiError } from '@/integrations/provider/error'
 import { toErrorMessage } from '@/lib/errors'
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504])
@@ -24,13 +25,13 @@ const retryDelay = (attempt: number, res: Response): number => {
   return BASE_DELAY_MS * 2 ** (attempt - 1)
 }
 
-const buildProjectApiUrl = (project: ProjectConfig, path: string): string => {
+const buildProjectApiUrl = (project: GitLabProjectConfig, path: string): string => {
   const base = new URL(project.url).origin
   const encodedProjectId = encodeURIComponent(project.project_id)
   return `${base}/api/v4/projects/${encodedProjectId}${path}`
 }
 
-const buildGlobalApiUrl = (project: ProjectConfig, path: string): string => {
+const buildGlobalApiUrl = (project: GitLabProjectConfig, path: string): string => {
   const base = new URL(project.url).origin
   return `${base}/api/v4${path}`
 }
@@ -59,7 +60,7 @@ const fetchWithTimeout = async (
 }
 
 export const gitlabApi = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   path: string,
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -95,7 +96,11 @@ export const gitlabApi = async (
 
     if (!RETRYABLE_STATUSES.has(res.status) || attempt === maxRetries) {
       const body = await res.text()
-      throw new Error(`GitLab API ${res.status} ${method} ${path}: ${body}`)
+      throw new ProviderApiError({
+        message: `GitLab API ${res.status} ${method} ${path}: ${body}`,
+        status: res.status,
+        method,
+      })
     }
 
     const delay = retryDelay(attempt + 1, res)
@@ -106,7 +111,7 @@ export const gitlabApi = async (
 }
 
 export const gitlabApiGlobal = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   path: string,
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -142,7 +147,11 @@ export const gitlabApiGlobal = async (
 
     if (!RETRYABLE_STATUSES.has(res.status) || attempt === maxRetries) {
       const body = await res.text()
-      throw new Error(`GitLab API ${res.status} ${method} ${path}: ${body}`)
+      throw new ProviderApiError({
+        message: `GitLab API ${res.status} ${method} ${path}: ${body}`,
+        status: res.status,
+        method,
+      })
     }
 
     const delay = retryDelay(attempt + 1, res)

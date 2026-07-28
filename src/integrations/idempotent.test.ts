@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { createWithReconciliation } from '@/integrations/gitlab/idempotent'
+import { createWithReconciliation } from '@/integrations/idempotent'
 
 describe('createWithReconciliation', () => {
   it('returns created value when create succeeds', async () => {

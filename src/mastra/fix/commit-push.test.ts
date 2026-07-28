@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import type { FixBatchRecord } from '@/db/fix-batches'
 import type { PreparedFixWorkspace, WorkspaceCommandResult } from '@/fix-workspaces/types'
 import {
@@ -13,7 +13,7 @@ import type { FixerOutput } from '@/mastra/fix/schema'
 
 const now = new Date('2026-06-04T00:00:00Z')
 
-const makeProject = (overrides: Partial<ProjectConfig> = {}): ProjectConfig => ({
+const makeProject = (overrides: Partial<GitLabProjectConfig> = {}): GitLabProjectConfig => ({
   key: 'demo',
   platform: 'gitlab',
   url: 'https://gitlab.com',

@@ -1,4 +1,4 @@
-import type { ProjectConfig } from '@/config'
+import type { GitLabProjectConfig } from '@/config'
 import { gitlabApi } from '@/integrations/gitlab/transport'
 
 interface AddMergeRequestNoteReactionParams {
@@ -15,7 +15,7 @@ interface AddDiscussionNoteReactionParams {
 }
 
 const createAwardEmoji = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   path: string,
   name: string,
 ): Promise<void> => {
@@ -32,7 +32,7 @@ const createAwardEmoji = async (
 }
 
 export const addMergeRequestNoteReaction = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   params: AddMergeRequestNoteReactionParams,
 ): Promise<void> => {
   await createAwardEmoji(
@@ -43,7 +43,7 @@ export const addMergeRequestNoteReaction = async (
 }
 
 export const addDiscussionNoteReaction = async (
-  project: ProjectConfig,
+  project: GitLabProjectConfig,
   params: AddDiscussionNoteReactionParams,
 ): Promise<void> => {
   await createAwardEmoji(

@@ -1,6 +1,6 @@
 # Mend
 
-Autonomous agentic system for MR code review. Triggered from GitLab webhooks. Uses Mastra for workflow orchestration and a selectable coding-agent harness for review execution.
+Autonomous agentic system for MR/PR code review. Triggered from GitLab or GitHub webhooks. Uses Mastra for workflow orchestration and a selectable coding-agent harness for review execution.
 
 ## Stack
 
@@ -8,17 +8,19 @@ Bun, TypeScript, Hono, Mastra, Codex CLI, Pi (`@mariozechner/pi-coding-agent`), 
 
 ## Architecture
 
-Three-step Mastra workflow: **setup** (clone/worktree) → **review** (selectable coding-agent harness) → **post** (GitLab draft notes).
+Three-step Mastra workflow: **setup** (clone/worktree) → **review** (selectable coding-agent harness) → **post** (provider publish: GitLab draft notes, GitHub pending review).
+
+Git hosting is pluggable behind the `ReviewProvider` port (`src/integrations/provider/client.ts`), selected per project via `platform: gitlab | github`. Publishing is an intent-level port operation (`publishReviewBatch`): the GitLab adapter runs the draft-note create/bulk-publish choreography; the GitHub adapter posts one atomic PR review plus a summary issue comment. GitHub thread replies/resolution go through GraphQL; general GitHub PR comments are pseudo-threads (`note_<id>`) that cannot be resolved (parity limitation).
 
 - Mastra owns the workflow: webhook routing, worktree lifecycle, run logging, workflow state.
 - The configured review harness (`pi`, `codex`, or `opencode`) owns the review: reads code, inspects changed files where supported, and produces structured findings.
 - LLM-based intent classification (via Pi with tools disabled) determines review template selection.
 - Reviews run in **initial** or **update** mode. Update mode resolves the diff base by trying candidates in order: previous reviewed SHA → `start_sha` → `base_sha` → target branch, with fetch-and-retry fallback.
 - File inspection is enforced with retry from harness session diagnostics where available. If any files are missed after the first pass, a retry prompt lists the missing files explicitly; remaining gaps are recorded as warnings.
-- Reviews are posted as GitLab draft notes, bulk-published after all notes are created. The post step refuses to publish if pre-existing draft notes are found (safety check against publishing someone else's drafts).
+- Reviews are posted atomically per provider: GitLab draft notes bulk-published after all notes are created; GitHub inline comments in a single review submission. The post step refuses to publish if pre-existing drafts (GitLab draft notes / GitHub pending review comments) are found (safety check against publishing someone else's drafts).
 - A DB-backed queue (`mr_review_queue`) with in-process workers deduplicates concurrent reviews per MR (latest-wins) with SHA-level dedup (skips if the exact SHA was already reviewed successfully). Updates a persistent MR status note (`queued`/`running`/`completed`/`failed`/`no_change`).
 - On startup, orphaned `running` review runs are marked as `failed`.
-- Dry run mode (`review.flags.dry_run`) skips all GitLab posting; logs draft note bodies to stdout.
+- Dry run mode (`review.flags.dry_run`) skips all provider posting; logs draft note bodies to stdout.
 - An evals dashboard at `/evals` renders review run history with filtering by project.
 
 Only MR review is implemented. Bug fix workflow, Slack integration, label-triggered reviews, and suspend/resume for reply watching are not built yet. MR note webhooks are processed for triage commands, thread replies, and memory.
@@ -27,9 +29,9 @@ Only MR review is implemented. Bug fix workflow, Slack integration, label-trigge
 
 - `src/index.ts` — entry point: boots Mastra, Hono server, webhook routes
 - `src/config.ts` — loads and validates `mend.yml` project config (Zod schemas)
-- `src/server/` — GitLab webhook handler, MR review queue, evals dashboard
+- `src/server/` — GitLab and GitHub webhook handlers (`gitlab-webhook.ts`, `github-webhook.ts`, neutral event types in `webhook-events.ts`), MR review queue, evals dashboard
 - `src/server/status-note-body.ts` — persistent MR status note rendering
-- `src/server/status-note-sync.ts` — persistent MR status note sync (non-throwing GitLab upsert)
+- `src/server/status-note-sync.ts` — persistent MR status note sync (non-throwing provider note upsert)
 - `src/server/review-context.ts` — previous run lookup and SHA-level dedup helpers for update reviews
 - `src/mastra/` — Mastra instance, workflow definition, steps (setup, review, post)
 - `src/mastra/workflows/` — workflow definitions (currently `mr-review.ts`)
@@ -37,7 +39,9 @@ Only MR review is implemented. Bug fix workflow, Slack integration, label-trigge
 - `src/mastra/review/` — intent classifier, template selection, prompt construction, output schema, context package, diff base resolution, publish plan/executor, formatting, inspection enforcement, diagnostics, eval scoring
 - `src/mastra/steps/` — the three workflow steps (setup, review, post)
 - `src/agents/` — coding-agent harness adapters and shared harness contract (`pi`, `codex`, `opencode`)
-- `src/integrations/gitlab/` — GitLab REST API functions and `GitLabClient` port (MR details, draft notes, note/discussion CRUD)
+- `src/integrations/provider/` — provider-neutral `ReviewProvider` port, neutral types, and the GitLab/GitHub adapter factories
+- `src/integrations/gitlab/` — GitLab REST API functions (MR details, draft notes, note/discussion CRUD)
+- `src/integrations/github/` — GitHub REST + GraphQL functions (PR details, issue comments, review threads, pending-review publish, reactions)
 - `src/integrations/repo.ts` — bare clone management, worktree creation/cleanup
 - `src/integrations/context7.ts` — Context7 documentation lookup (registered as Pi tool)
 - `src/db/` — Drizzle schema (`review_runs` table), DB client, run CRUD
@@ -53,7 +57,7 @@ Only MR review is implemented. Bug fix workflow, Slack integration, label-trigge
 
 ## Config
 
-Project configuration lives in `mend.yml` (gitignored). See `mend.example.yml` for the template. Secrets live in `.env`. The config supports multiple projects, each with: GitLab connection, trigger mode (`ready`/`all`; `label` is schema-valid but currently not executed), review LLM model and thinking level, intent classifier settings, and feature flags.
+Project configuration lives in `mend.yml` (gitignored). See `mend.example.yml` for the template. Secrets live in `.env`. The config supports multiple projects, each with: git host connection (`platform: gitlab` with `project_id`, or `platform: github` with `repo: owner/name`), trigger mode (`ready`/`all`; `label` is schema-valid but currently not executed), review LLM model and thinking level, intent classifier settings, and feature flags.
 
 ## Commands
 

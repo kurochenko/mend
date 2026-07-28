@@ -3,22 +3,23 @@ import {
   markMrStatusNoteSynced,
   upsertDesiredMrStatusNote,
 } from '@/db/status-notes'
-import type { GitLabClient } from '@/integrations/gitlab/client'
+import { ProviderApiError } from '@/integrations/provider/error'
+import type { ReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
 import { buildStatusNoteBody, STATUS_MARKER, type StatusNoteInput } from '@/server/status-note-body'
 
 export interface StatusNoteSyncDependencies {
-  gitlab: GitLabClient
+  provider: ReviewProvider
   buildStatusNoteBody: typeof buildStatusNoteBody
   upsertDesiredMrStatusNote: typeof upsertDesiredMrStatusNote
   markMrStatusNoteSynced: typeof markMrStatusNoteSynced
   markMrStatusNoteForCreate: typeof markMrStatusNoteForCreate
 }
 
-type StatusNoteSyncDependencyInput = Pick<StatusNoteSyncDependencies, 'gitlab'> &
-  Partial<Omit<StatusNoteSyncDependencies, 'gitlab'>>
+type StatusNoteSyncDependencyInput = Pick<StatusNoteSyncDependencies, 'provider'> &
+  Partial<Omit<StatusNoteSyncDependencies, 'provider'>>
 
-const defaultDependencies: Omit<StatusNoteSyncDependencies, 'gitlab'> = {
+const defaultDependencies: Omit<StatusNoteSyncDependencies, 'provider'> = {
   buildStatusNoteBody,
   upsertDesiredMrStatusNote,
   markMrStatusNoteSynced,
@@ -26,16 +27,15 @@ const defaultDependencies: Omit<StatusNoteSyncDependencies, 'gitlab'> = {
 }
 
 const isRecoverableStatusNoteUpdateFailure = (error: unknown): boolean => {
-  const message = toErrorMessage(error)
-  return message.includes('GitLab API 404 PUT') || message.includes('GitLab API 403 PUT')
+  return error instanceof ProviderApiError && (error.status === 404 || error.status === 403)
 }
 
 export const listExistingStatusNotes = async (
-  gitlab: GitLabClient,
+  provider: ReviewProvider,
   mrIid: number,
 ): Promise<Array<{ id: number }>> => {
-  const currentUser = await gitlab.fetchCurrentUser()
-  const notes = await gitlab.listMrNotes(mrIid)
+  const currentUser = await provider.fetchCurrentUser()
+  const notes = await provider.listNotes(mrIid)
   return notes.filter(
     (note) => note.body.includes(STATUS_MARKER) && note.author?.id === currentUser.id,
   )
@@ -56,7 +56,7 @@ export const upsertStatusNote = async (params: {
 
   if (state.noteId !== null) {
     try {
-      await dependencies.gitlab.updateMrNote(input.event.mrIid, state.noteId, body)
+      await dependencies.provider.updateNote(input.event.mrIid, state.noteId, body)
       await dependencies.markMrStatusNoteSynced({
         id: state.id,
         noteId: state.noteId,
@@ -73,17 +73,17 @@ export const upsertStatusNote = async (params: {
     }
   }
 
-  const existingNotes = await listExistingStatusNotes(dependencies.gitlab, input.event.mrIid)
+  const existingNotes = await listExistingStatusNotes(dependencies.provider, input.event.mrIid)
   const [canonicalNote, ...duplicateNotes] = [...existingNotes].sort(
     (left, right) => right.id - left.id,
   )
 
   if (canonicalNote) {
-    await dependencies.gitlab.updateMrNote(input.event.mrIid, canonicalNote.id, body)
+    await dependencies.provider.updateNote(input.event.mrIid, canonicalNote.id, body)
     await Promise.all(
       duplicateNotes.map(async (note) => {
         try {
-          await dependencies.gitlab.deleteMrNote(input.event.mrIid, note.id)
+          await dependencies.provider.deleteNote(input.event.mrIid, note.id)
         } catch (error) {
           console.warn(
             `[status-note] failed to delete duplicate status note ${note.id} for ${input.event.projectKey} MR !${input.event.mrIid}: ${toErrorMessage(error)}`,
@@ -98,7 +98,7 @@ export const upsertStatusNote = async (params: {
     return
   }
 
-  const createdNote = await dependencies.gitlab.createMrNote(input.event.mrIid, body)
+  const createdNote = await dependencies.provider.createNote(input.event.mrIid, body)
   await dependencies.markMrStatusNoteSynced({
     id: state.id,
     noteId: createdNote.id,

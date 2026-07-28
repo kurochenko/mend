@@ -120,6 +120,40 @@ projects:
   #       timeout_ms: 45000
   #       failure_policy: mixed
 
+  # Example: GitHub repository (experimental — not yet exercised against a live
+  # GitHub project; expect rough edges)
+  # github-app:
+  #   platform: github
+  #   url: https://github.com
+  #   token: ${GITHUB_TOKEN}
+  #   webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+  #   repo: org/name
+  #   repo_url: git@github.com:org/name.git
+  #   default_branch: main
+  #   trigger:
+  #     mode: ready
+  #   tools:
+  #     context7:
+  #       api_key: ${CONTEXT7_API_KEY}
+  #   review:
+  #     llm:
+  #       model: anthropic/claude-sonnet-4-20250514
+  #       thinking_level: medium
+  #     template:
+  #       prompt: auto
+  #       label_prefix: "ai-review:"
+  #     flags:
+  #       prompt_templates_v2: true
+  #       schema_v2: true
+  #       structured_findings_post: true
+  #       structural_signals: true
+  #     intent:
+  #       harness: pi
+  #       model: anthropic/claude-sonnet-4-20250514
+  #       thinking_level: minimal
+  #       timeout_ms: 45000
+  #       failure_policy: mixed
+
 # Improvement miner: periodically clusters confirmed review findings into typed
 # improvement proposals (tooling / instructions / process). Global execution over
 # all configured projects; proposals are surfaced in the /improvements dashboard

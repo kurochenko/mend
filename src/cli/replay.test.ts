@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { buildReplayInputFromMr, loadBenchmarkConfig } from '@/cli/replay'
-import type { MrDetails } from '@/integrations/gitlab/mr'
+import type { ChangeRequestDetails } from '@/integrations/provider/types'
 
 const historicalSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const liveSha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 
-const mrDetails: MrDetails = {
+const mrDetails: ChangeRequestDetails = {
   title: 'Fix checkout',
   description: 'Historical MR',
   labels: ['bug'],

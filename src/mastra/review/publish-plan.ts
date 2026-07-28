@@ -1,5 +1,6 @@
 import type { DiffMap } from '@/lib/diff'
 import { lookupPosition } from '@/lib/diff'
+import type { DiffRefs } from '@/integrations/provider/types'
 import {
   buildInlineThreadFingerprint,
   buildSummaryFindingThreadFingerprint,
@@ -21,23 +22,6 @@ import type { ResolutionVerdict } from '@/mastra/review/schema'
 import type { ReviewFinding, ReviewInlineComment } from '@/mastra/review/schema'
 import type { PostStepInput } from '@/mastra/review/run-result'
 
-export interface PostPlanDiffRefs {
-  base_sha: string
-  head_sha: string
-  start_sha: string
-}
-
-export interface PlannedDraftNotePosition {
-  position_type: 'text'
-  base_sha: string
-  head_sha: string
-  start_sha: string
-  old_path: string
-  new_path: string
-  old_line?: number
-  new_line?: number
-}
-
 export interface ExistingPublishedThread {
   findingFingerprint: string
   status: 'open' | 'resolved'
@@ -52,12 +36,13 @@ interface SummaryFindingDiscussionDraft {
 }
 
 export interface PlannedInlineDraft {
-  inlineCommentIndex: number
-  comment: ReviewInlineComment
+  source: { kind: 'inline_comment'; index: number } | { kind: 'finding'; index: number }
+  path: string
+  line: number
   fingerprint: string
   body: string
   markedBody: string
-  position: PlannedDraftNotePosition
+  anchor: { old_line?: number; new_line?: number }
 }
 
 export interface PlannedFindingDiscussion {
@@ -114,6 +99,7 @@ export interface PostPlan {
   inlineDrafts: PlannedInlineDraft[]
   findingDiscussions: PlannedFindingDiscussion[]
   skippedInlineComments: SkippedInlineComment[]
+  diffRefs: DiffRefs
   summaryBody: string
   markedSummaryBody: string
   reviewNumber: number
@@ -231,6 +217,28 @@ export const applyMrScopeGuard = (
 }
 
 const buildInlineCommentAnchorKey = (file: string, line: number): string => `${file}:${line}`
+
+const findFindingInlineAnchor = (
+  finding: ReviewFinding,
+  diffMap: DiffMap,
+): {
+  path: string
+  line: number
+  anchor: { old_line?: number; new_line?: number }
+} | null => {
+  for (const evidence of finding.evidence) {
+    if (evidence.type !== 'file_line') {
+      continue
+    }
+
+    const anchor = lookupPosition(diffMap, evidence.file, evidence.line)
+    if (anchor) {
+      return { path: evidence.file, line: evidence.line, anchor }
+    }
+  }
+
+  return null
+}
 
 const buildActiveMemoryAnchorKeys = (input: PostStepInput): Set<string> => {
   const keys = new Set<string>()
@@ -411,7 +419,7 @@ const planThreadResolutions = (params: {
 
 export const buildPostPlan = (params: {
   input: PostStepInput
-  diffRefs: PostPlanDiffRefs
+  diffRefs: DiffRefs
   diffMap: DiffMap
   changedFiles: string[]
   reviewNumber: number
@@ -513,9 +521,9 @@ export const buildPostPlan = (params: {
       continue
     }
 
-    const position = lookupPosition(params.diffMap, comment.file, comment.line)
+    const anchor = lookupPosition(params.diffMap, comment.file, comment.line)
 
-    if (!position) {
+    if (!anchor) {
       const skipped = { comment, reason: 'line_not_in_diff' as const }
       const draft = buildSkippedInlineDiscussionDraft(skipped)
       skippedInlineComments.push(skipped)
@@ -529,20 +537,13 @@ export const buildPostPlan = (params: {
     }
 
     inlineDrafts.push({
-      inlineCommentIndex,
-      comment,
+      source: { kind: 'inline_comment', index: inlineCommentIndex },
+      path: comment.file,
+      line: comment.line,
       fingerprint,
       body,
       markedBody: appendInlineMarkers(body, params.input.reviewRunId, comment.file, comment.line),
-      position: {
-        position_type: 'text',
-        base_sha: params.diffRefs.base_sha,
-        head_sha: params.diffRefs.head_sha,
-        start_sha: params.diffRefs.start_sha,
-        old_path: comment.file,
-        new_path: comment.file,
-        ...position,
-      },
+      anchor,
     })
     anchoredInlineCommentKeys.add(buildInlineCommentAnchorKey(comment.file, comment.line))
   }
@@ -563,6 +564,37 @@ export const buildPostPlan = (params: {
     return false
   })
 
+  const inlineFindingFingerprints = new Set<string>()
+  const findingsToAnchor = params.input.featureFlags.structuredFindingsPost ? findings : []
+  for (const [findingIndex, finding] of findingsToAnchor.entries()) {
+    if (findingHasInlineAnchor(finding, anchoredInlineCommentKeys)) {
+      continue
+    }
+
+    const context = findFindingInlineAnchor(finding, params.diffMap)
+    if (!context) {
+      continue
+    }
+
+    const fingerprint = buildSummaryFindingThreadFingerprint(finding.id)
+    const body = formatFindingDiscussionBody(finding)
+    inlineDrafts.push({
+      source: { kind: 'finding', index: findingIndex },
+      path: context.path,
+      line: context.line,
+      fingerprint,
+      body,
+      markedBody: appendSummaryFindingMarkers(body, params.input.reviewRunId, {
+        fingerprint,
+        previousFindingId: finding.id,
+        path: context.path,
+        line: context.line,
+      }),
+      anchor: context.anchor,
+    })
+    inlineFindingFingerprints.add(fingerprint)
+  }
+
   const findingDiscussions: PlannedFindingDiscussion[] = [
     ...skippedInlineDiscussionDrafts.map((draft) => ({
       ...draft,
@@ -573,7 +605,11 @@ export const buildPostPlan = (params: {
     })),
     ...(params.input.featureFlags.structuredFindingsPost
       ? findings.flatMap((finding, index) => {
-          if (!shouldPostFindingAsDiscussion(finding, anchoredInlineCommentKeys)) {
+          const fingerprint = buildSummaryFindingThreadFingerprint(finding.id)
+          if (
+            !shouldPostFindingAsDiscussion(finding, anchoredInlineCommentKeys) ||
+            inlineFindingFingerprints.has(fingerprint)
+          ) {
             return []
           }
 
@@ -637,6 +673,7 @@ export const buildPostPlan = (params: {
     inlineDrafts,
     findingDiscussions,
     skippedInlineComments,
+    diffRefs: params.diffRefs,
     summaryBody,
     markedSummaryBody: appendSummaryMarkers(summaryBody, params.input.reviewRunId),
     reviewNumber: params.reviewNumber,
@@ -657,8 +694,8 @@ export const buildPostPlan = (params: {
 
 export const renderPostPlanDryRun = (plan: PostPlan): void => {
   for (const draft of plan.inlineDrafts) {
-    console.log(`[post/dry-run] draft note on ${draft.comment.file}:${draft.comment.line}`)
-    console.log(`[post/dry-run] position: ${JSON.stringify(draft.position)}`)
+    console.log(`[post/dry-run] draft note on ${draft.path}:${draft.line}`)
+    console.log(`[post/dry-run] position: ${JSON.stringify(draft.anchor)}`)
     console.log(`[post/dry-run] body:\n${draft.markedBody}\n`)
   }
 

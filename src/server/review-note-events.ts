@@ -21,16 +21,8 @@ import {
   type ReviewMessageRecord,
   type ReviewThreadRecord,
 } from '@/db/review-threads'
-import { addDiscussionNoteReaction } from '@/integrations/gitlab/reactions'
-import {
-  getMrDiscussion,
-  listMrDiscussions,
-  replyToDiscussion,
-  resolveDiscussion,
-  type Discussion,
-  type DiscussionNote,
-} from '@/integrations/gitlab/discussions'
-import { fetchCurrentUser } from '@/integrations/gitlab/notes'
+import { createReviewProvider, type ReviewProvider } from '@/integrations/provider/client'
+import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
 import { postStepOutputSchema } from '@/mastra/review/run-result'
 import { buildReviewConversationPlan, mentionsBot } from '@/server/review-conversation'
 import { requestAcceptedFixBatch } from '@/server/fix-batch-queue'
@@ -48,9 +40,10 @@ import { parseMendMarkers } from '@/mastra/review/markers'
 import { normalizeReviewMessageBody } from '@/lib/review-threads'
 import { parseProviderTimestamp } from '@/lib/timestamps'
 import type { ReviewFindingState } from '@/db/schema'
+import type { ReviewNoteEventPayload } from '@/server/webhook-events'
 import {
-  markGitLabThreadResolved,
-  upsertGitLabDiscussionThread,
+  markProviderThreadResolved,
+  upsertProviderThread,
   persistOutboundReply,
   type ThreadSyncDependencies,
 } from '@/server/thread-sync'
@@ -71,50 +64,26 @@ const getThreadSyncDependencies = (): Partial<ThreadSyncDependencies> => ({
   ...threadSyncDependencyOverrides,
 })
 
-interface GitlabNoteWebhookPayload {
-  project: {
-    id: number
-  }
-  user: {
-    id: number
-    username: string
-  }
-  merge_request?: {
-    iid: number
-  }
-  object_attributes: {
-    id: number
-    note: string
-    noteable_type: string
-    discussion_id?: string
-    created_at?: string
-    updated_at?: string
-    action?: string
-    url?: string
-    system?: boolean
-  }
-}
-
 const findDiscussionForNote = async (
-  project: ProjectConfig,
+  provider: ReviewProvider,
   mrIid: number,
   noteId: number,
   discussionId?: string,
-): Promise<{ discussion: Discussion; note: DiscussionNote } | null> => {
+): Promise<{ thread: ProviderThread; note: ProviderThreadMessage } | null> => {
   if (discussionId) {
-    const discussion = await getMrDiscussion(project, mrIid, discussionId)
-    const note = discussion.notes.find((candidate) => candidate.id === noteId)
+    const thread = await provider.getThread(mrIid, discussionId)
+    const note = thread.messages.find((candidate) => candidate.id === `${noteId}`)
     if (note) {
-      return { discussion, note }
+      return { thread, note }
     }
     return null
   }
 
-  const discussions = await listMrDiscussions(project, mrIid)
-  for (const discussion of discussions) {
-    const note = discussion.notes.find((candidate) => candidate.id === noteId)
+  const threads = await provider.listThreads(mrIid)
+  for (const thread of threads) {
+    const note = thread.messages.find((candidate) => candidate.id === `${noteId}`)
     if (note) {
-      return { discussion, note }
+      return { thread, note }
     }
   }
   return null
@@ -124,26 +93,26 @@ const ensureReviewThread = async (params: {
   project: ProjectConfig
   projectKey: string
   mrIid: number
-  discussion: Discussion
+  thread: ProviderThread
   latestReviewRunId: string | null
 }): Promise<ReviewThreadRecord> => {
   const existing = await getReviewThreadByProviderThreadId({
-    provider: 'gitlab',
-    providerThreadId: params.discussion.id,
+    provider: params.project.platform,
+    providerThreadId: params.thread.id,
   })
 
   if (existing) {
     return existing
   }
 
-  const firstNote = params.discussion.notes[0]
+  const firstNote = params.thread.messages[0]
   const firstNoteRunId = firstNote ? (parseMendMarkers(firstNote.body).runId ?? null) : null
 
-  return await upsertGitLabDiscussionThread({
+  return await upsertProviderThread({
     project: params.project,
     projectKey: params.projectKey,
     mrIid: params.mrIid,
-    discussion: params.discussion,
+    thread: params.thread,
     latestReviewRunId: firstNoteRunId ?? params.latestReviewRunId,
     dependencies: getThreadSyncDependencies(),
   })
@@ -151,19 +120,19 @@ const ensureReviewThread = async (params: {
 
 const refreshExistingThreadFromDiscussion = async (params: {
   thread: ReviewThreadRecord
-  discussion: Discussion
+  providerThread: ProviderThread
 }): Promise<ReviewThreadRecord> => {
-  const firstNote = params.discussion.notes[0]
+  const firstNote = params.providerThread.messages[0]
   const firstNoteRunId = firstNote ? (parseMendMarkers(firstNote.body).runId ?? null) : null
 
-  return await upsertGitLabDiscussionThread({
+  return await upsertProviderThread({
     project: {
       key: params.thread.projectKey,
-      project_id: Number(params.thread.repoExternalId),
+      platform: params.thread.provider,
     } as ProjectConfig,
     projectKey: params.thread.projectKey,
     mrIid: params.thread.reviewExternalId,
-    discussion: params.discussion,
+    thread: params.providerThread,
     latestReviewRunId: firstNoteRunId ?? params.thread.reviewRunId,
     existingThread: params.thread,
     dependencies: getThreadSyncDependencies(),
@@ -171,19 +140,18 @@ const refreshExistingThreadFromDiscussion = async (params: {
 }
 
 const addReaction = async (params: {
-  project: ProjectConfig
+  provider: ReviewProvider
   mrIid: number
-  discussionId: string
   noteId: number
   name: string
+  hasThreadContext: boolean
 }): Promise<void> => {
   try {
-    await addDiscussionNoteReaction(params.project, {
-      mrIid: params.mrIid,
-      discussionId: params.discussionId,
-      noteId: params.noteId,
-      name: params.name,
-    })
+    if (params.hasThreadContext) {
+      await params.provider.addThreadMessageReaction(params.mrIid, params.noteId, params.name)
+    } else {
+      await params.provider.addNoteReaction(params.mrIid, params.noteId, params.name)
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes('has already been taken')) {
@@ -310,14 +278,13 @@ const triageResolutionReplyBody = (
 }
 
 const replyAndResolveTriageThread = async (params: {
-  project: ProjectConfig
+  provider: ReviewProvider
   mrIid: number
   thread: ReviewThreadRecord
   state: Extract<ReviewFindingState, 'rejected' | 'deferred'>
   reason: string
 }): Promise<void> => {
-  const reply = await replyToDiscussion(
-    params.project,
+  const reply = await params.provider.replyToThread(
     params.mrIid,
     params.thread.providerThreadId,
     triageResolutionReplyBody(params.state, params.reason),
@@ -330,15 +297,22 @@ const replyAndResolveTriageThread = async (params: {
     dependencies: getThreadSyncDependencies(),
   })
 
-  await resolveDiscussion(params.project, params.mrIid, params.thread.providerThreadId)
-  await markGitLabThreadResolved({
-    providerThreadId: params.thread.providerThreadId,
-    dependencies: getThreadSyncDependencies(),
-  })
+  const providerResolved = await params.provider.resolveThread(
+    params.mrIid,
+    params.thread.providerThreadId,
+  )
+  if (providerResolved) {
+    await markProviderThreadResolved({
+      provider: params.provider.kind,
+      providerThreadId: params.thread.providerThreadId,
+      dependencies: getThreadSyncDependencies(),
+    })
+  }
 }
 
 const applyReviewTriageCommand = async (params: {
   project: ProjectConfig
+  provider: ReviewProvider
   mastra?: Mastra
   body: string
   botUsername: string
@@ -356,8 +330,7 @@ const applyReviewTriageCommand = async (params: {
 
   const trustedUsers = params.project.review.triage.trusted_usernames
   if (trustedUsers.length > 0 && !trustedUsers.includes(params.user.username)) {
-    await replyToDiscussion(
-      params.project,
+    await params.provider.replyToThread(
       params.mrIid,
       params.thread.providerThreadId,
       `Mend ignored this command because ${params.user.username} is not configured as a trusted triage user.`,
@@ -383,7 +356,7 @@ const applyReviewTriageCommand = async (params: {
           : outcome.reason === 'no_accepted_findings'
             ? 'No accepted findings are ready to fix.'
             : `There are ${outcome.pendingCount} pending finding(s). Reply to each finding first, or use @mend fix accepted anyway.`
-      await replyToDiscussion(params.project, params.mrIid, params.thread.providerThreadId, reason)
+      await params.provider.replyToThread(params.mrIid, params.thread.providerThreadId, reason)
     } else if (outcome.status === 'queued' && params.mastra) {
       await ensureFixBatchRunner({
         mastra: params.mastra,
@@ -417,7 +390,7 @@ const applyReviewTriageCommand = async (params: {
 
   if (target.state === 'rejected' || target.state === 'deferred') {
     await replyAndResolveTriageThread({
-      project: params.project,
+      provider: params.provider,
       mrIid: params.mrIid,
       thread: params.thread,
       state: target.state,
@@ -431,12 +404,13 @@ const applyReviewTriageCommand = async (params: {
 export type { IsNoteAddressedToMendParams }
 export { isNoteAddressedToMend }
 
-export const processGitlabMergeRequestNote = async (params: {
+export const processReviewNoteEvent = async (params: {
   project: ProjectConfig
   mastra?: Mastra
-  payload: GitlabNoteWebhookPayload
+  payload: ReviewNoteEventPayload
 }): Promise<void> => {
   const { project, payload } = params
+  const provider = createReviewProvider(project)
 
   if (
     payload.object_attributes.noteable_type !== 'MergeRequest' ||
@@ -446,7 +420,7 @@ export const processGitlabMergeRequestNote = async (params: {
     return
   }
 
-  const currentUser = await fetchCurrentUser(project)
+  const currentUser = await provider.fetchCurrentUser()
   if (payload.user.id === currentUser.id) {
     return
   }
@@ -454,7 +428,9 @@ export const processGitlabMergeRequestNote = async (params: {
   const mrIid = payload.merge_request.iid
   const noteId = payload.object_attributes.id
   const noteAction = payload.object_attributes.action ?? 'create'
-  const webhookDiscussionId = payload.object_attributes.discussion_id
+  const webhookDiscussionId = payload.object_attributes.discussion_id ?? undefined
+  const hasThreadContext =
+    webhookDiscussionId !== undefined || payload.object_attributes.type === 'DiffNote'
   const directMention = mentionsBot(payload.object_attributes.note, currentUser.username)
 
   if (noteAction !== 'create') {
@@ -462,13 +438,13 @@ export const processGitlabMergeRequestNote = async (params: {
   }
 
   let discussionId: string
-  let discussion: Discussion | null = null
+  let discussion: ProviderThread | null = null
   let existingThread: ReviewThreadRecord | null = null
-  let threadMessages: ReviewMessageRecord[] = []
+  let threadMessages: ReviewMessageRecord[]
 
   if (webhookDiscussionId) {
     existingThread = await getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerThreadId: webhookDiscussionId,
     })
   }
@@ -484,36 +460,36 @@ export const processGitlabMergeRequestNote = async (params: {
       )
 
     if (needsDiscussionContext) {
-      const result = await findDiscussionForNote(project, mrIid, noteId, webhookDiscussionId)
+      const result = await findDiscussionForNote(provider, mrIid, noteId, webhookDiscussionId)
       if (result) {
-        discussion = result.discussion
+        discussion = result.thread
         discussionId = discussion.id
         existingThread = await refreshExistingThreadFromDiscussion({
           thread: existingThread,
-          discussion,
+          providerThread: discussion,
         })
       }
     }
   } else {
-    const result = await findDiscussionForNote(project, mrIid, noteId, webhookDiscussionId)
+    const result = await findDiscussionForNote(provider, mrIid, noteId, webhookDiscussionId)
     if (!result) {
       if (directMention) {
         throw new Error(`Unable to locate discussion for MR !${mrIid} note ${noteId}`)
       }
       return
     }
-    discussion = result.discussion
+    discussion = result.thread
     discussionId = discussion.id
 
     existingThread = await getReviewThreadByProviderThreadId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerThreadId: discussionId,
     })
     threadMessages = existingThread ? await listReviewMessagesForThread(existingThread.id) : []
   }
 
   const lastMessage = threadMessages[threadMessages.length - 1] ?? null
-  const firstDiscussionNoteAuthorId = discussion?.notes[0]?.author.id ?? null
+  const firstDiscussionNoteAuthorId = discussion?.messages[0]?.author.id ?? null
 
   const addressedToMend = isNoteAddressedToMend({
     directMention,
@@ -540,7 +516,7 @@ export const processGitlabMergeRequestNote = async (params: {
       project,
       projectKey: project.key,
       mrIid,
-      discussion,
+      thread: discussion,
       latestReviewRunId: latestReview?.reviewRunId ?? null,
     })
   }
@@ -551,7 +527,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
   const createdMessage = await createReviewMessageIfAbsent({
     threadId: thread.id,
-    provider: 'gitlab',
+    provider: project.platform,
     reviewRunId: thread.reviewRunId ?? latestReview?.reviewRunId ?? null,
     authorType: 'human',
     authorExternalId: `${payload.user.id}`,
@@ -570,7 +546,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
   if (!inboundMessage) {
     const existingMessage = await getReviewMessageByProviderMessageId({
-      provider: 'gitlab',
+      provider: project.platform,
       providerMessageId: `${noteId}`,
     })
 
@@ -588,17 +564,18 @@ export const processGitlabMergeRequestNote = async (params: {
 
   try {
     await addReaction({
-      project,
+      provider,
       mrIid,
-      discussionId,
       noteId,
       name: 'eyes',
+      hasThreadContext,
     }).catch((error) => {
       console.warn(`[notes] failed to add eyes reaction to note ${noteId}: ${error}`)
     })
 
     const triageResult = await applyReviewTriageCommand({
       project,
+      provider,
       mastra: params.mastra,
       body: payload.object_attributes.note,
       botUsername: currentUser.username,
@@ -612,11 +589,11 @@ export const processGitlabMergeRequestNote = async (params: {
     if (triageResult.handled) {
       if (triageResult.acknowledged) {
         await addReaction({
-          project,
+          provider,
           mrIid,
-          discussionId,
           noteId,
           name: 'white_check_mark',
+          hasThreadContext,
         }).catch((error) => {
           console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
         })
@@ -636,7 +613,7 @@ export const processGitlabMergeRequestNote = async (params: {
       (message) => message.authorType === 'agent' && message.direction === 'outbound',
     )
     const originalDiscussionNote =
-      discussion?.notes[0]?.author.id === currentUser.id ? discussion.notes[0] : null
+      discussion?.messages[0]?.author.id === currentUser.id ? discussion.messages[0] : null
     const originalAgentBodyText = originalAgentMessage
       ? stripAllMendMarkers(originalAgentMessage.body)
       : originalDiscussionNote
@@ -773,7 +750,7 @@ export const processGitlabMergeRequestNote = async (params: {
 
     if (replyBody) {
       if (!hasExistingLocalReply(threadMessages, replyBody)) {
-        const reply = await replyToDiscussion(project, mrIid, discussionId, replyBody)
+        const reply = await provider.replyToThread(mrIid, discussionId, replyBody)
         const replyMessage = await persistOutboundReply({
           thread,
           reviewRunId: replyReviewRunId,
@@ -797,20 +774,23 @@ export const processGitlabMergeRequestNote = async (params: {
       (thread.threadKind === 'inline' || thread.threadKind === 'summary_finding') &&
       thread.status !== 'resolved'
     ) {
-      await resolveDiscussion(project, mrIid, discussionId)
-      await markGitLabThreadResolved({
-        providerThreadId: discussionId,
-        dependencies: getThreadSyncDependencies(),
-      })
+      const providerResolved = await provider.resolveThread(mrIid, discussionId)
+      if (providerResolved) {
+        await markProviderThreadResolved({
+          provider: provider.kind,
+          providerThreadId: discussionId,
+          dependencies: getThreadSyncDependencies(),
+        })
+      }
     }
 
     if (addSuccessReaction) {
       await addReaction({
-        project,
+        provider,
         mrIid,
-        discussionId,
         noteId,
         name: 'white_check_mark',
+        hasThreadContext,
       }).catch((error) => {
         console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
       })
@@ -822,3 +802,5 @@ export const processGitlabMergeRequestNote = async (params: {
     throw error
   }
 }
+
+export const processGitlabMergeRequestNote = processReviewNoteEvent

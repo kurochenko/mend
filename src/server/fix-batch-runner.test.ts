@@ -4,7 +4,7 @@ import type { FixBatchRecord } from '@/db/fix-batches'
 import type { ReviewFindingRecord } from '@/db/review-findings'
 import type { PreparedFixWorkspace, WorkspaceCommandResult } from '@/fix-workspaces/types'
 import type { FixerOutput } from '@/mastra/fix/schema'
-import { ensureFixBatchRunner } from '@/server/fix-batch-runner'
+import { assertFixSourceRepository, ensureFixBatchRunner } from '@/server/fix-batch-runner'
 
 const now = new Date('2026-06-04T00:00:00Z')
 
@@ -199,14 +199,55 @@ describe('ensureFixBatchRunner', () => {
         getReviewQueueRecord: mock(async () => null),
         listReviewFindingsForMr: mock(async () => [makeFinding()]),
         createFixWorkspaceProvider: mock(() => ({ kind: 'docker' as const, prepare })),
-        fetchMr: mock(async () => ({
-          title: 'MR',
-          description: '',
-          labels: [],
-          sourceBranch: 'feature/fix',
-          targetBranch: 'main',
-          url: 'https://gitlab.com/org/repo/-/merge_requests/42',
-          sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        createReviewProvider: mock(() => ({
+          kind: 'gitlab' as const,
+          fetchCurrentUser: mock(async () => ({ id: 1, username: 'mend-bot' })),
+          fetchChangeRequest: mock(async () => ({
+            title: 'MR',
+            description: '',
+            labels: [],
+            sourceBranch: 'feature/fix',
+            sourceRepository: '123',
+            targetBranch: 'main',
+            url: 'https://gitlab.com/org/repo/-/merge_requests/42',
+            sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          })),
+          fetchDiffRefs: mock(async () => ({
+            baseSha: 'base',
+            headSha: 'head',
+            startSha: 'start',
+          })),
+          fetchChangedFiles: mock(async () => []),
+          listNotes: mock(async () => []),
+          createNote: mock(async () => ({ id: 1, body: '', author: null })),
+          updateNote: mock(async () => ({ id: 1, body: '', author: null })),
+          deleteNote: mock(async () => {}),
+          listThreads: mock(async () => []),
+          getThread: mock(async () => ({ id: 'thread-1', isThread: true, messages: [], raw: {} })),
+          createThread: mock(async () => ({
+            id: 'thread-1',
+            isThread: true,
+            messages: [],
+            raw: {},
+          })),
+          replyToThread: mock(async () => ({
+            id: '1',
+            body: '',
+            author: { id: 1, username: 'mend-bot', raw: {} },
+            resolvable: false,
+            position: null,
+            raw: {},
+          })),
+          resolveThread: mock(async () => true),
+          addNoteReaction: mock(async () => {}),
+          addThreadMessageReaction: mock(async () => {}),
+          publishReviewBatch: mock(async () => ({
+            preExistingDraftCount: 0,
+            recoveredDraftCount: 0,
+            draftRecoveryAction: 'none' as const,
+            summaryNoteId: 1,
+            summaryReconciled: false,
+          })),
         })),
         ensureClone: mock(async () => '/tmp/demo.git'),
         createWorktree: mock(async () => '/tmp/worktree'),
@@ -228,5 +269,64 @@ describe('ensureFixBatchRunner', () => {
     expect(completeFixBatch).toHaveBeenCalled()
     expect(workspace.teardown).toHaveBeenCalled()
     expect(failFixBatchRun).not.toHaveBeenCalled()
+  })
+})
+
+describe('assertFixSourceRepository', () => {
+  test('refuses GitHub fork pull requests without adding cross-repository push behavior', () => {
+    const project = {
+      ...makeProject(),
+      platform: 'github' as const,
+      url: 'https://github.com',
+      repo: 'org/repo',
+      repo_url: 'git@github.com:org/repo.git',
+    }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'PR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: 'contributor/repo',
+        targetBranch: 'main',
+        url: 'https://github.com/org/repo/pull/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).toThrow('GitHub fix batches require the change request source branch to belong to org/repo')
+  })
+
+  test('refuses GitLab fork merge requests', () => {
+    const project = { ...makeProject(), project_id: 'org/repo' }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'MR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: null,
+        targetBranch: 'main',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).toThrow('GitLab fix batches require the change request source branch to belong to org/repo')
+  })
+
+  test('accepts same-repository GitLab merge requests', () => {
+    const project = { ...makeProject(), project_id: 'org/repo' }
+
+    expect(() =>
+      assertFixSourceRepository(project, {
+        title: 'MR',
+        description: '',
+        labels: [],
+        sourceBranch: 'feature/fix',
+        sourceRepository: 'org/repo',
+        targetBranch: 'main',
+        url: 'https://gitlab.com/org/repo/-/merge_requests/42',
+        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).not.toThrow()
   })
 })
