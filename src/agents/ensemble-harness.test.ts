@@ -710,6 +710,35 @@ describe('applyAssessmentPolicy', () => {
     expect(result.inlineComments[0]?.severity).toBe('bug')
     expect(result.assessment).toBe('request_changes')
   })
+
+  it('preserves expected typed resolution verdicts during ensemble normalization', () => {
+    const result = applyAssessmentPolicy(
+      policyOutput({
+        assessment: 'approve',
+        resolutionVerdicts: [
+          {
+            previousFindingId: 'finding:discussion-84',
+            status: 'fixed',
+            explanation: 'The required guard now protects the core flow.',
+          },
+        ],
+      }),
+      {
+        reviewMode: 'update',
+        changedFiles: ['src/app.ts'],
+        expectedPriorBlockerIds: ['finding:discussion-84'],
+      },
+    )
+
+    expect(result.assessment).toBe('approve')
+    expect(result.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:discussion-84',
+        status: 'fixed',
+        explanation: 'The required guard now protects the core flow.',
+      },
+    ])
+  })
 })
 
 describe('update-mode ensemble slimming', () => {

@@ -689,7 +689,11 @@ const isInDelta = (files: string[], changedFiles: string[]): boolean =>
 
 export const applyAssessmentPolicy = (
   output: ReviewOutputV2,
-  params: { reviewMode: EnsembleReviewMode; changedFiles: string[] },
+  params: {
+    reviewMode: EnsembleReviewMode
+    changedFiles: string[]
+    expectedPriorBlockerIds?: readonly string[]
+  },
 ): ReviewOutputV2 => {
   const applyDeltaFilter = params.reviewMode === 'update' && params.changedFiles.length > 0
 
@@ -700,12 +704,19 @@ export const applyAssessmentPolicy = (
     ? output.inlineComments.filter((comment) => isInDelta([comment.file], params.changedFiles))
     : output.inlineComments
 
-  return applyBlockingReviewPolicy({ ...output, findings, inlineComments })
+  return applyBlockingReviewPolicy(
+    { ...output, findings, inlineComments },
+    params.expectedPriorBlockerIds ?? [],
+  )
 }
 
 const applyPolicyToResult = (
   result: ReviewAgentResult,
-  params: { reviewMode: EnsembleReviewMode; changedFiles: string[] },
+  params: {
+    reviewMode: EnsembleReviewMode
+    changedFiles: string[]
+    expectedPriorBlockerIds: readonly string[]
+  },
 ): ReviewAgentResult => {
   try {
     const output = parseReviewOutputV2(result.output)
@@ -1119,6 +1130,7 @@ export const createEnsembleReviewHarness = (options?: {
       const codexHarness = subHarnesses.codex
       const observedResults: ReviewAgentResult[] = []
       const changedFiles = config.changedFiles ?? []
+      const expectedPriorBlockerIds = config.expectedPriorBlockerIds ?? []
 
       if (!finderHarness) {
         console.warn(`[ensemble] finder harness not available: ${ensembleConfig.finder_harness}`)
@@ -1151,7 +1163,11 @@ export const createEnsembleReviewHarness = (options?: {
         })
 
         return buildSuccessfulEnsembleResult({
-          result: applyPolicyToResult(synthesizerResult, { reviewMode, changedFiles }),
+          result: applyPolicyToResult(synthesizerResult, {
+            reviewMode,
+            changedFiles,
+            expectedPriorBlockerIds,
+          }),
           start,
           model: ensembleConfig.synthesizer_model,
           observedResults,
@@ -1161,7 +1177,11 @@ export const createEnsembleReviewHarness = (options?: {
         console.warn(`[ensemble] synthesizer failed: ${toErrorMessage(error)}`)
         if (successfulDeepResult?.result?.success && successfulDeepResult.parsed) {
           return buildSuccessfulEnsembleResult({
-            result: applyPolicyToResult(successfulDeepResult.result, { reviewMode, changedFiles }),
+            result: applyPolicyToResult(successfulDeepResult.result, {
+              reviewMode,
+              changedFiles,
+              expectedPriorBlockerIds,
+            }),
             start,
             model: ensembleConfig.deep_model,
             observedResults,

@@ -268,7 +268,7 @@ const buildResolutionVerdictSchema = (hasPreviousContext: boolean): string | nul
     ? [
         '  "resolutionVerdicts": [',
         '    {',
-        '      "previousFindingId": "id-from-previous-review",',
+        '      "previousFindingId": "finding:<provider-thread-id>" | "inline:<provider-thread-id>",',
         '      "status": "fixed" | "not_fixed" | "partially_fixed" | "cannot_determine",',
         '      "explanation": "Why this status was chosen"',
         '    }',

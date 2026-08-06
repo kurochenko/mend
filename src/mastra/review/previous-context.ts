@@ -306,6 +306,24 @@ interface PreviousContextItems {
   inlineComments: PreviousInlineComment[]
 }
 
+const isPersistedPseudoThreadResolution = (finding: ReviewFindingRecord): boolean =>
+  finding.provider === 'github' &&
+  finding.providerThreadId.startsWith('note_') &&
+  (finding.state === 'fixed' || finding.state === 'resolved')
+
+const applyPersistedPseudoThreadResolutions = (
+  findings: ReviewFindingRecord[],
+  threadStatus: Map<string, boolean>,
+): Map<string, boolean> => {
+  const resolvedThreadStatus = new Map(threadStatus)
+  for (const finding of findings) {
+    if (isPersistedPseudoThreadResolution(finding)) {
+      resolvedThreadStatus.set(finding.providerThreadId, true)
+    }
+  }
+  return resolvedThreadStatus
+}
+
 const buildCurrentContextItems = (
   result: PostStepOutput,
   threadStatus: Map<string, boolean>,
@@ -482,6 +500,8 @@ export const buildPreviousReviewContext = async (params: {
       )
     }
   }
+
+  threadStatus = applyPersistedPseudoThreadResolutions(trackedFindings, threadStatus)
 
   const current = buildCurrentContextItems(result, threadStatus)
   const historical = buildHistoricalContextItems(trackedFindings, threadStatus)

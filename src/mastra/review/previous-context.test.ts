@@ -1026,4 +1026,97 @@ describe('buildPreviousReviewContext', () => {
       status: 'open',
     })
   })
+
+  test('keeps a fixed GitHub note pseudo-thread resolved when the provider cannot resolve it', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'fixed-sha',
+        result: makePostResult({
+          reviewMode: 'update',
+          threadedFindings: [
+            {
+              id: 'fixed-summary-blocker',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'cross_file',
+              title: 'Fixed summary blocker',
+              body: 'The persisted verdict records this blocker as fixed.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+              providerThreadId: 'note_55',
+              providerMessageId: '55',
+            },
+          ],
+        }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'note_55',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'fixed-summary-blocker',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'cross_file',
+              title: 'Fixed summary blocker',
+              body: 'The persisted verdict records this blocker as fixed.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'note_55',
+          threadKind: 'summary_finding',
+          status: 'open',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'note_55',
+          isThread: false,
+          messages: [
+            {
+              id: '55',
+              body: 'General GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: false,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-fixed',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:note_55',
+        actionability: 'required',
+        resolved: true,
+      }),
+    )
+  })
 })

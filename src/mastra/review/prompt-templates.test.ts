@@ -213,6 +213,10 @@ describe('buildReviewSystemPrompt', () => {
     expect(prompt).toContain('**[inline:discussion-3]** src/app.ts:42')
     expect(prompt).toContain('exact typed identity shown in square brackets')
     expect(prompt).toContain('resolved, recommended, optional, or untracked')
+    expect(prompt).toContain(
+      '"previousFindingId": "finding:<provider-thread-id>" | "inline:<provider-thread-id>"',
+    )
+    expect(prompt).not.toContain('"previousFindingId": "id-from-previous-review"')
   })
 
   it('omits update-mode previous finding guidance for initial reviews', () => {

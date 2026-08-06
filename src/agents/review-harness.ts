@@ -12,6 +12,7 @@ export interface ReviewAgentRunConfig {
   instructions: string
   prompt: string
   changedFiles?: string[]
+  expectedPriorBlockerIds?: readonly string[]
   timeoutMs?: number
   context7ApiKey?: string | null
   toolMode?: ReviewAgentToolMode

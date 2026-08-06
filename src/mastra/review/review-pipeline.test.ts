@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { ProjectConfig } from '@/config'
 import type { ReviewAgentHarness, ReviewAgentResult } from '@/agents/review-harness'
+import { createEnsembleReviewHarness } from '@/agents/ensemble-harness'
 import { getEffectiveReviewAgentConfig, invokeReviewAgent } from '@/mastra/review/review-pipeline'
 
 const validReviewOutput = JSON.stringify({
@@ -412,6 +413,68 @@ describe('invokeReviewAgent', () => {
     )
     expect(result.inspectionResult.inspectedChangedFileCoverage).toBe(1)
     expect(calls).toBe(1)
+  })
+
+  it('preserves a fixed typed verdict through ensemble and outer policy normalization', async () => {
+    const fixedVerdictOutput = JSON.stringify({
+      version: 'v2',
+      assessment: 'approve',
+      summary: 'The prior blocker is fixed.',
+      findings: [],
+      inlineComments: [],
+      resolutionVerdicts: [
+        {
+          previousFindingId: 'finding:discussion-84',
+          status: 'fixed',
+          explanation: 'The required guard now protects the core flow.',
+        },
+      ],
+    })
+    const subHarness: ReviewAgentHarness = {
+      id: 'codex',
+      invoke: async (config) => ({
+        harness: 'codex',
+        model: config.model,
+        success: true,
+        output: config.sessionDir.includes('finder-')
+          ? JSON.stringify({ candidates: [] })
+          : fixedVerdictOutput,
+        durationMs: 1,
+        inspectedFiles: config.changedFiles,
+      }),
+    }
+    const ensemble = createEnsembleReviewHarness({
+      config: { deep_samples: 1, verify_enabled: false },
+      harnesses: { codex: subHarness },
+    })
+
+    const result = await invokeReviewAgent({
+      project: createProject({
+        agent: {
+          harness: 'ensemble',
+          model: 'gpt-5.5',
+        },
+      }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions:
+        'Review mode: consecutive update. Verify all files changed since the previous review.',
+      prompt: 'review prompt',
+      changedFiles: ['src/agents/ensemble-harness.ts'],
+      context7ApiKey: null,
+      expectedPriorBlockerIds: ['finding:discussion-84'],
+      harnesses: { ensemble },
+    })
+
+    expect(result.reviewResult.harness).toBe('ensemble')
+    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:discussion-84',
+        status: 'fixed',
+        explanation: 'The required guard now protects the core flow.',
+      },
+    ])
   })
 
   it('records comparison harness result through the same harness boundary', async () => {
