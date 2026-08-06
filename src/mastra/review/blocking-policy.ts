@@ -10,6 +10,36 @@ const isRequiredInlineComment = (comment: ReviewOutputV2['inlineComments'][numbe
 const isUnresolvedVerdict = (verdict: ReviewOutputV2['resolutionVerdicts'][number]): boolean =>
   verdict.status !== 'fixed'
 
+const normalizeExpectedVerdicts = (
+  verdicts: ReviewOutputV2['resolutionVerdicts'],
+  expectedPriorBlockerIds: ReadonlySet<string>,
+): { resolutionVerdicts: ReviewOutputV2['resolutionVerdicts']; unresolvedCount: number } => {
+  const verdictsByPriorBlockerId = new Map<string, ReviewOutputV2['resolutionVerdicts'][number][]>()
+  for (const verdict of verdicts) {
+    if (!expectedPriorBlockerIds.has(verdict.previousFindingId)) {
+      continue
+    }
+    const matchingVerdicts = verdictsByPriorBlockerId.get(verdict.previousFindingId) ?? []
+    matchingVerdicts.push(verdict)
+    verdictsByPriorBlockerId.set(verdict.previousFindingId, matchingVerdicts)
+  }
+
+  let unresolvedCount = 0
+  const resolutionVerdicts: ReviewOutputV2['resolutionVerdicts'] = []
+  for (const id of expectedPriorBlockerIds) {
+    const matchingVerdicts = verdictsByPriorBlockerId.get(id) ?? []
+    const normalizedVerdict = matchingVerdicts.find(isUnresolvedVerdict) ?? matchingVerdicts[0]
+    if (normalizedVerdict) {
+      resolutionVerdicts.push(normalizedVerdict)
+    }
+    if (!normalizedVerdict || isUnresolvedVerdict(normalizedVerdict)) {
+      unresolvedCount += 1
+    }
+  }
+
+  return { resolutionVerdicts, unresolvedCount }
+}
+
 export const collectExpectedPriorBlockerIds = (
   context: Pick<PreviousReviewContext, 'findings' | 'inlineComments'> | null,
 ): string[] => {
@@ -20,15 +50,21 @@ export const collectExpectedPriorBlockerIds = (
   const findingIds = context.findings
     .filter(
       (finding) =>
-        finding.discussionId !== null && !finding.resolved && finding.severity !== 'suggestion',
+        finding.identity !== null &&
+        !finding.resolved &&
+        finding.actionability === 'required' &&
+        finding.severity !== 'suggestion',
     )
-    .map((finding) => finding.id)
+    .flatMap((finding) => (finding.identity ? [finding.identity] : []))
   const inlineCommentIds = context.inlineComments
     .filter(
       (comment) =>
-        comment.discussionId !== null && !comment.resolved && comment.severity !== 'suggestion',
+        comment.identity !== null &&
+        !comment.resolved &&
+        comment.actionability === 'required' &&
+        comment.severity !== 'suggestion',
     )
-    .map((comment) => `${comment.file}:${comment.line}`)
+    .flatMap((comment) => (comment.identity ? [comment.identity] : []))
 
   return [...new Set([...findingIds, ...inlineCommentIds])]
 }
@@ -61,26 +97,12 @@ export const applyBlockingReviewPolicy = (
 ): ReviewOutputV2 => {
   const findings = output.findings.filter(isRequiredFinding)
   const inlineComments = output.inlineComments.filter(isRequiredInlineComment)
-  const verdictsByPriorBlockerId = new Map<string, ReviewOutputV2['resolutionVerdicts'][number][]>()
   const expectedPriorBlockerIdSet = new Set(expectedPriorBlockerIds)
-
-  for (const verdict of output.resolutionVerdicts) {
-    if (!expectedPriorBlockerIdSet.has(verdict.previousFindingId)) {
-      continue
-    }
-
-    const verdicts = verdictsByPriorBlockerId.get(verdict.previousFindingId) ?? []
-    verdicts.push(verdict)
-    verdictsByPriorBlockerId.set(verdict.previousFindingId, verdicts)
-  }
-
-  let unresolvedPriorBlockerCount = 0
-  for (const id of expectedPriorBlockerIdSet) {
-    const verdicts = verdictsByPriorBlockerId.get(id) ?? []
-    if (verdicts.length === 0 || verdicts.some(isUnresolvedVerdict)) {
-      unresolvedPriorBlockerCount += 1
-    }
-  }
+  const normalizedVerdicts = normalizeExpectedVerdicts(
+    output.resolutionVerdicts,
+    expectedPriorBlockerIdSet,
+  )
+  const unresolvedPriorBlockerCount = normalizedVerdicts.unresolvedCount
   const blockingFindingCount = findings.length + inlineComments.length
   const hasBlockingDefect = blockingFindingCount > 0 || unresolvedPriorBlockerCount > 0
   const assessment = hasBlockingDefect
@@ -94,5 +116,12 @@ export const applyBlockingReviewPolicy = (
     assessment,
   )
 
-  return { ...output, assessment, summary, findings, inlineComments }
+  return {
+    ...output,
+    assessment,
+    summary,
+    findings,
+    inlineComments,
+    resolutionVerdicts: normalizedVerdicts.resolutionVerdicts,
+  }
 }

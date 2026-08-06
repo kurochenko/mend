@@ -159,6 +159,62 @@ describe('buildReviewSystemPrompt', () => {
     )
   })
 
+  it('renders typed thread identities and limits verdicts to open required blockers', () => {
+    const prompt = buildReviewSystemPrompt({
+      ...baseInput,
+      reviewMode: 'update',
+      previousReviewedSha: 'prev123',
+      previousReviewContext: {
+        previousRunId: 'run-previous',
+        previousCommitSha: 'prev123',
+        previousAssessment: 'request_changes',
+        findings: [
+          {
+            identity: 'finding:discussion-1',
+            id: 'prior-finding',
+            category: 'correctness',
+            severity: 'bug',
+            actionability: 'required',
+            title: 'Prior blocker',
+            body: 'The core flow remains broken.',
+            files: ['src/app.ts'],
+            discussionId: 'discussion-1',
+            resolved: false,
+          },
+          {
+            identity: 'finding:discussion-2',
+            id: 'prior-optional',
+            category: 'performance',
+            severity: 'performance',
+            actionability: 'optional',
+            title: 'Optional history',
+            body: 'This does not gate.',
+            files: ['src/app.ts'],
+            discussionId: 'discussion-2',
+            resolved: false,
+          },
+        ],
+        inlineComments: [
+          {
+            identity: 'inline:discussion-3',
+            file: 'src/app.ts',
+            line: 42,
+            severity: 'security',
+            actionability: 'required',
+            body: 'Prior inline blocker',
+            discussionId: 'discussion-3',
+            resolved: false,
+          },
+        ],
+      },
+    })
+
+    expect(prompt).toContain('**[finding:discussion-1]**')
+    expect(prompt).toContain('**[inline:discussion-3]** src/app.ts:42')
+    expect(prompt).toContain('exact typed identity shown in square brackets')
+    expect(prompt).toContain('resolved, recommended, optional, or untracked')
+  })
+
   it('omits update-mode previous finding guidance for initial reviews', () => {
     const prompt = buildReviewSystemPrompt(baseInput)
 

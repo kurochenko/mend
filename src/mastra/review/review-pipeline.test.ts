@@ -211,6 +211,50 @@ describe('invokeReviewAgent', () => {
     expect(result.validatedReview.summary).not.toContain('Optional improvements')
   })
 
+  it('removes non-expected verdicts before the validated output reaches posting', async () => {
+    const harnessOutput = JSON.stringify({
+      version: 'v2',
+      assessment: 'approve',
+      summary: 'All blockers are fixed.',
+      findings: [],
+      inlineComments: [],
+      resolutionVerdicts: [
+        {
+          previousFindingId: 'finding:expected-thread',
+          status: 'fixed',
+          explanation: 'The expected blocker is fixed.',
+        },
+        {
+          previousFindingId: 'finding:resolved-thread',
+          status: 'partially_fixed',
+          explanation: 'This resolved thread must not receive a reply.',
+        },
+      ],
+    })
+    const result = await invokeReviewAgent({
+      project: createProject({ agent: { harness: 'codex', model: 'gpt-5' } }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: [],
+      context7ApiKey: null,
+      expectedPriorBlockerIds: ['finding:expected-thread'],
+      harnesses: {
+        codex: createHarness('codex', [{ success: true, output: harnessOutput }]),
+      },
+    })
+
+    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:expected-thread',
+        status: 'fixed',
+        explanation: 'The expected blocker is fixed.',
+      },
+    ])
+  })
+
   it('retries invalid final output once without tools', async () => {
     const toolModes: Array<'full' | 'none' | undefined> = []
     const prompts: string[] = []

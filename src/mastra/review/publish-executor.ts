@@ -73,6 +73,38 @@ export interface PostExecutionResult {
   resolutionStats: ResolutionStats
 }
 
+export const buildPersistablePostedReviewFindings = (params: {
+  findings: PostPlan['findings']
+  inlineComments: PostPlan['inlineComments']
+  postedFindings: PostedFinding[]
+  postedInlineComments: PostedInlineComment[]
+  threadedFindings: ThreadedFinding[]
+  threadedInlineComments: ThreadedInlineComment[]
+}): Array<{ ref: PostedFinding; metadata: unknown }> => [
+  ...params.findings.map((finding, index) => ({
+    ref: params.postedFindings[index] ?? emptyPostedThreadRef(),
+    metadata: { kind: 'finding', finding },
+  })),
+  ...params.inlineComments.map((inlineComment, index) => ({
+    ref: params.postedInlineComments[index] ?? emptyPostedThreadRef(),
+    metadata: { kind: 'inline_comment', inlineComment },
+  })),
+  ...params.threadedFindings.map((finding) => ({
+    ref: {
+      providerThreadId: finding.providerThreadId,
+      providerMessageId: finding.providerMessageId,
+    },
+    metadata: { kind: 'finding', finding },
+  })),
+  ...params.threadedInlineComments.map((inlineComment) => ({
+    ref: {
+      providerThreadId: inlineComment.providerThreadId,
+      providerMessageId: inlineComment.providerMessageId,
+    },
+    metadata: { kind: 'inline_comment', inlineComment },
+  })),
+]
+
 interface PersistedPublishedThread {
   findingFingerprint: string
   providerThreadId: string
@@ -253,16 +285,14 @@ export const executePostPlan = async (params: {
     projectKey: input.projectKey,
     mrIid: input.mrIid,
     reviewRunId: input.reviewRunId,
-    findings: [
-      ...plan.findings.map((finding, index) => ({
-        ref: postedFindings[index] ?? emptyPostedThreadRef(),
-        metadata: { kind: 'finding', finding },
-      })),
-      ...plan.inlineComments.map((inlineComment, index) => ({
-        ref: postedInlineComments[index] ?? emptyPostedThreadRef(),
-        metadata: { kind: 'inline_comment', inlineComment },
-      })),
-    ],
+    findings: buildPersistablePostedReviewFindings({
+      findings: plan.findings,
+      inlineComments: plan.inlineComments,
+      postedFindings,
+      postedInlineComments,
+      threadedFindings,
+      threadedInlineComments,
+    }),
   })
 
   let resolutionStats: ResolutionStats = {

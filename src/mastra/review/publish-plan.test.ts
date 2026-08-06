@@ -347,4 +347,78 @@ describe('buildPostPlan', () => {
     expect(plan.inlineDrafts).toHaveLength(0)
     expect(plan.findingDiscussions).toHaveLength(0)
   })
+
+  it('maps typed verdict identities to the exact provider thread before posting', () => {
+    const plan = buildPostPlan({
+      input: makeInput({
+        resolutionVerdicts: [
+          {
+            previousFindingId: 'finding:discussion-finding',
+            status: 'fixed',
+            explanation: 'The structured blocker is fixed.',
+          },
+          {
+            previousFindingId: 'inline:discussion-a',
+            status: 'fixed',
+            explanation: 'The first inline blocker is fixed.',
+          },
+          {
+            previousFindingId: 'inline:discussion-b',
+            status: 'partially_fixed',
+            explanation: 'The second inline blocker remains incomplete.',
+          },
+        ],
+      }),
+      diffRefs,
+      diffMap: mrDiff,
+      changedFiles: ['src/app.ts'],
+      reviewNumber: 2,
+      existingPublishedThreads: [],
+      previousContext: {
+        findings: [
+          {
+            identity: 'finding:discussion-finding',
+            id: 'same-human-id',
+            discussionId: 'discussion-finding',
+            resolved: false,
+          },
+        ],
+        inlineComments: [
+          {
+            identity: 'inline:discussion-a',
+            file: 'src/app.ts',
+            line: 2,
+            discussionId: 'discussion-a',
+            resolved: false,
+          },
+          {
+            identity: 'inline:discussion-b',
+            file: 'src/app.ts',
+            line: 2,
+            discussionId: 'discussion-b',
+            resolved: false,
+          },
+        ],
+      },
+    })
+
+    expect(plan.threadResolutions).toEqual([
+      expect.objectContaining({
+        previousFindingId: 'finding:discussion-finding',
+        discussionId: 'discussion-finding',
+        markResolved: true,
+      }),
+      expect.objectContaining({
+        previousFindingId: 'inline:discussion-a',
+        discussionId: 'discussion-a',
+        markResolved: true,
+      }),
+      expect.objectContaining({
+        previousFindingId: 'inline:discussion-b',
+        discussionId: 'discussion-b',
+        markResolved: false,
+      }),
+    ])
+    expect(plan.unmatchedVerdictCount).toBe(0)
+  })
 })

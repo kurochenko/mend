@@ -32,7 +32,7 @@ const isHighPriorityFinding = (f: PreviousFinding): boolean =>
 
 const formatFindingDetailed = (f: PreviousFinding): string =>
   [
-    `- **[${f.id}]** (${f.category} / ${f.severity}) ${f.title}`,
+    `- **[${f.identity ?? f.id}]** (${f.category} / ${f.severity} / ${f.actionability}) ${f.title}`,
     `  ${f.body}`,
     f.files.length > 0 ? `  Files: ${f.files.join(', ')}` : null,
     `  Status: ${f.discussionId ? (f.resolved ? 'resolved on the code host' : 'open on the code host') : 'not tracked on the code host'}`,
@@ -41,17 +41,17 @@ const formatFindingDetailed = (f: PreviousFinding): string =>
     .join('\n')
 
 const formatFindingSummary = (f: PreviousFinding): string =>
-  `- **[${f.id}]** (${f.severity}) ${f.title} — ${f.discussionId ? (f.resolved ? 'resolved' : 'open') : 'not tracked'}`
+  `- **[${f.identity ?? f.id}]** (${f.severity} / ${f.actionability}) ${f.title} — ${f.discussionId ? (f.resolved ? 'resolved' : 'open') : 'not tracked'}`
 
 const formatInlineDetailed = (c: PreviousInlineComment): string =>
   [
-    `- ${c.file}:${c.line}`,
+    `- **[${c.identity ?? `${c.file}:${c.line}`}]** ${c.file}:${c.line}`,
     `  ${c.body}`,
     `  Status: ${c.resolved ? 'resolved on the code host' : 'unresolved'}`,
   ].join('\n')
 
 const formatInlineSummary = (c: PreviousInlineComment): string =>
-  `- ${c.file}:${c.line} — ${c.resolved ? 'resolved' : 'unresolved'}`
+  `- **[${c.identity ?? `${c.file}:${c.line}`}]** ${c.file}:${c.line} — ${c.resolved ? 'resolved' : 'unresolved'}`
 
 const buildPreviousContextSections = (ctx: PreviousReviewContext): string[] => {
   const totalItems = ctx.findings.length + ctx.inlineComments.length
@@ -102,16 +102,15 @@ const buildPreviousContextSections = (ctx: PreviousReviewContext): string[] => {
 export const RESOLUTION_INSTRUCTIONS = [
   '## Resolution Verification',
   '',
-  'For each previous inline comment and each previous finding tracked on the code host:',
+  'For each open required previous blocker tracked on the code host:',
   '- Check whether the current changes address the concern',
   '- Include a resolutionVerdicts array in your output',
-  '- For inline comments, set previousFindingId to the file:line identifier (e.g., "src/components/Table.vue:42")',
-  '- For structured findings, set previousFindingId to the stable finding id (e.g., "dup-layout")',
+  '- Set previousFindingId to the exact typed identity shown in square brackets (for example, "inline:discussion-42" or "finding:discussion-84")',
   '- Use status "fixed" only when the code change clearly addresses the concern',
   '- Use "not_fixed" when the issue persists unchanged',
   '- Use "partially_fixed" when the fix is incomplete',
   '- Use "cannot_determine" when the code changed too much to tell',
-  '- Do not include previous findings marked as not tracked on the code host in resolutionVerdicts',
+  '- Do not include resolved, recommended, optional, or untracked previous content in resolutionVerdicts',
   '- Do not let resolution checking distract from reviewing new changes — new issues take priority',
 ].join('\n')
 

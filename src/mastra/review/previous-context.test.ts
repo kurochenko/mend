@@ -7,6 +7,9 @@ const mockListReviewThreadsForRun = mock<(...args: unknown[]) => Promise<unknown
 const mockListReviewThreadsForMr = mock<(...args: unknown[]) => Promise<unknown[]>>(() =>
   Promise.resolve([]),
 )
+const mockListReviewFindingsForMr = mock<(...args: unknown[]) => Promise<unknown[]>>(() =>
+  Promise.resolve([]),
+)
 const mockUpdateReviewThreadStatusByProviderThreadId = mock(() => Promise.resolve())
 const mockGetReviewMessageByProviderMessageId = mock<(...args: unknown[]) => Promise<unknown>>(() =>
   Promise.resolve(null),
@@ -24,12 +27,26 @@ mock.module('@/db/review-runs', () => ({
   getReviewRun: mockGetReviewRun,
 }))
 
+mock.module('@/db/review-findings', () => ({
+  listReviewFindingsForMr: mockListReviewFindingsForMr,
+  upsertReviewFinding: mock(() => Promise.resolve(null)),
+  getReviewFindingByProviderThreadId: mock(() => Promise.resolve(null)),
+  getReviewFindingByThreadId: mock(() => Promise.resolve(null)),
+  updateReviewFindingState: mock(() => Promise.resolve(null)),
+  countReviewFindingsByStateForMr: mock(() => Promise.resolve({})),
+  countReviewFindingSeveritiesForMr: mock(() =>
+    Promise.resolve({ bug: 0, security: 0, performance: 0, suggestion: 0 }),
+  ),
+}))
+
 mock.module('@/db/review-threads', () => ({
   listReviewThreadsForRun: mockListReviewThreadsForRun,
   listReviewThreadsForMr: mockListReviewThreadsForMr,
+  getReviewThreadByProviderThreadId: mock(() => Promise.resolve(null)),
   getReviewMessageByProviderMessageId: mockGetReviewMessageByProviderMessageId,
   updateReviewThreadStatusByProviderThreadId: mockUpdateReviewThreadStatusByProviderThreadId,
   upsertReviewMessage: mockUpsertReviewMessage,
+  upsertReviewThread: mock(() => Promise.resolve(null)),
 }))
 
 mock.module('@/db/review-memory', () => ({
@@ -208,6 +225,7 @@ describe('buildPreviousReviewContext', () => {
     mockGetReviewRun.mockReset()
     mockListReviewThreadsForRun.mockReset()
     mockListReviewThreadsForMr.mockReset()
+    mockListReviewFindingsForMr.mockReset()
     mockUpdateReviewThreadStatusByProviderThreadId.mockReset()
     mockGetReviewMessageByProviderMessageId.mockReset()
     mockUpsertReviewMessage.mockReset()
@@ -217,6 +235,7 @@ describe('buildPreviousReviewContext', () => {
 
     mockListReviewThreadsForRun.mockImplementation(() => Promise.resolve([]))
     mockListReviewThreadsForMr.mockImplementation(() => Promise.resolve([]))
+    mockListReviewFindingsForMr.mockImplementation(() => Promise.resolve([]))
     mockUpdateReviewThreadStatusByProviderThreadId.mockImplementation(() => Promise.resolve())
     mockGetReviewMessageByProviderMessageId.mockImplementation(() => Promise.resolve(null))
     mockUpsertReviewMessage.mockImplementation(() => Promise.resolve({ id: 'message-human-reply' }))
@@ -384,7 +403,7 @@ describe('buildPreviousReviewContext', () => {
         },
       }),
     )
-    mockListReviewThreadsForRun.mockImplementation(() =>
+    mockListReviewThreadsForMr.mockImplementation(() =>
       Promise.resolve([
         {
           provider: 'gitlab',
@@ -424,6 +443,230 @@ describe('buildPreviousReviewContext', () => {
         resolved: true,
       }),
     )
+  })
+
+  test('reconstructs typed blocker history across updates without collapsing same-line threads', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'latest-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          providerThreadId: 'finding-old',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'old-required',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'cross_file',
+              title: 'Old required blocker',
+              body: 'Still tracked from an earlier update.',
+              files: ['src/old.ts'],
+              evidence: [{ type: 'file_line', file: 'src/old.ts', line: 3 }],
+            },
+          },
+        },
+        {
+          providerThreadId: 'finding-optional',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'old-optional',
+              category: 'performance',
+              severity: 'performance',
+              actionability: 'optional',
+              scope: 'single_file',
+              title: 'Optional history',
+              body: 'This must never gate.',
+              files: ['src/old.ts'],
+              evidence: [{ type: 'file_line', file: 'src/old.ts', line: 4 }],
+            },
+          },
+        },
+        ...['inline-a', 'inline-b'].map((providerThreadId) => ({
+          providerThreadId,
+          metadata: {
+            kind: 'inline_comment',
+            inlineComment: {
+              file: 'src/same-line.ts',
+              line: 9,
+              severity: 'bug',
+              body: `Distinct blocker ${providerThreadId}`,
+            },
+          },
+        })),
+        {
+          providerThreadId: 'finding-resolved',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'resolved-required',
+              category: 'security',
+              severity: 'security',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Resolved history',
+              body: 'This no longer gates.',
+              files: ['src/resolved.ts'],
+              evidence: [{ type: 'file_line', file: 'src/resolved.ts', line: 5 }],
+            },
+          },
+        },
+        {
+          providerThreadId: 'finding-reopened',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'reopened-required',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Reopened history',
+              body: 'This gates again.',
+              files: ['src/reopened.ts'],
+              evidence: [{ type: 'file_line', file: 'src/reopened.ts', line: 6 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve(
+        [
+          'finding-old',
+          'finding-optional',
+          'inline-a',
+          'inline-b',
+          'finding-resolved',
+          'finding-reopened',
+        ].map((providerThreadId) => ({
+          provider: 'gitlab',
+          providerThreadId,
+          threadKind: providerThreadId.startsWith('inline') ? 'inline' : 'summary_finding',
+          status:
+            providerThreadId === 'finding-resolved' || providerThreadId === 'finding-reopened'
+              ? 'resolved'
+              : 'open',
+        })),
+      ),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'finding-reopened',
+          isThread: true,
+          messages: [
+            {
+              id: 'reopened-note',
+              body: 'Reopened thread',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'gitlab', project_id: 1 } as never,
+      mrIid: 1570,
+      previousRunId: 'run-latest',
+    })
+
+    expect(context?.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          identity: 'finding:finding-old',
+          actionability: 'required',
+          resolved: false,
+        }),
+        expect.objectContaining({
+          identity: 'finding:finding-optional',
+          actionability: 'optional',
+          resolved: false,
+        }),
+        expect.objectContaining({ identity: 'finding:finding-resolved', resolved: true }),
+        expect.objectContaining({ identity: 'finding:finding-reopened', resolved: false }),
+      ]),
+    )
+    expect(context?.inlineComments.map((comment) => comment.identity)).toEqual([
+      'inline:inline-a',
+      'inline:inline-b',
+    ])
+  })
+
+  test('keeps distinct current-run threads even when legacy content identifiers collide', async () => {
+    const duplicateFinding = {
+      id: 'duplicate-model-id',
+      category: 'correctness',
+      severity: 'bug',
+      actionability: 'required',
+      scope: 'single_file',
+      title: 'Duplicate model id',
+      body: 'Distinct provider threads remain distinct.',
+      files: ['src/app.ts'],
+      evidence: [{ type: 'file_line', file: 'src/app.ts', line: 7 }],
+    }
+    const duplicateInline = {
+      file: 'src/app.ts',
+      line: 7,
+      severity: 'bug',
+      body: 'Identical location and body.',
+    }
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'latest-sha',
+        result: makePostResult({
+          findings: [duplicateFinding],
+          postedFindings: [
+            { providerThreadId: 'finding-thread-a', providerMessageId: 'finding-message-a' },
+          ],
+          threadedFindings: [
+            {
+              ...duplicateFinding,
+              providerThreadId: 'finding-thread-b',
+              providerMessageId: 'finding-message-b',
+            },
+          ],
+          inlineComments: [duplicateInline],
+          postedInlineComments: [
+            { providerThreadId: 'inline-thread-a', providerMessageId: 'inline-message-a' },
+          ],
+          threadedInlineComments: [
+            {
+              ...duplicateInline,
+              providerThreadId: 'inline-thread-b',
+              providerMessageId: 'inline-message-b',
+            },
+          ],
+        }),
+      }),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'gitlab', project_id: 1 } as never,
+      mrIid: 1570,
+      previousRunId: 'run-latest',
+    })
+
+    expect(context?.findings.map((finding) => finding.identity)).toEqual([
+      'finding:finding-thread-a',
+      'finding:finding-thread-b',
+    ])
+    expect(context?.inlineComments.map((comment) => comment.identity)).toEqual([
+      'inline:inline-thread-a',
+      'inline:inline-thread-b',
+    ])
   })
 
   test('loads open and resolved stored threads while live status wins and archived stays excluded', async () => {
@@ -720,7 +963,7 @@ describe('buildPreviousReviewContext', () => {
         }),
       }),
     )
-    mockListReviewThreadsForRun.mockImplementation(() =>
+    mockListReviewThreadsForMr.mockImplementation(() =>
       Promise.resolve([
         {
           provider: 'gitlab',
