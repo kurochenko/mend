@@ -118,6 +118,14 @@ describe('buildReviewSystemPrompt', () => {
     expect(prompt).toContain('Formatting, whitespace, and import ordering')
     expect(prompt).toContain('Scope anchoring:')
     expect(prompt).toContain('Do not invent findings to satisfy categories')
+    expect(prompt).toContain('Finding eligibility gate:')
+    expect(prompt).toContain('a realistic trigger in intended or ordinary use')
+    expect(prompt).toContain('concrete material consequence')
+    expect(prompt).toContain('Every new finding must be release- or development-blocking')
+    expect(prompt).toContain('Do not emit "recommended" or "optional" findings')
+    expect(prompt).toContain(
+      'Theoretical performance, reliability, concurrency, or scalability risks',
+    )
     expect(prompt).toContain('Do not report the same issue in both findings and inlineComments')
     expect(prompt).toContain(
       'If the issue can be anchored to a specific diff line, prefer inlineComments',
@@ -151,6 +159,66 @@ describe('buildReviewSystemPrompt', () => {
     )
   })
 
+  it('renders typed thread identities and limits verdicts to open required blockers', () => {
+    const prompt = buildReviewSystemPrompt({
+      ...baseInput,
+      reviewMode: 'update',
+      previousReviewedSha: 'prev123',
+      previousReviewContext: {
+        previousRunId: 'run-previous',
+        previousCommitSha: 'prev123',
+        previousAssessment: 'request_changes',
+        findings: [
+          {
+            identity: 'finding:discussion-1',
+            id: 'prior-finding',
+            category: 'correctness',
+            severity: 'bug',
+            actionability: 'required',
+            title: 'Prior blocker',
+            body: 'The core flow remains broken.',
+            files: ['src/app.ts'],
+            discussionId: 'discussion-1',
+            resolved: false,
+          },
+          {
+            identity: 'finding:discussion-2',
+            id: 'prior-optional',
+            category: 'performance',
+            severity: 'performance',
+            actionability: 'optional',
+            title: 'Optional history',
+            body: 'This does not gate.',
+            files: ['src/app.ts'],
+            discussionId: 'discussion-2',
+            resolved: false,
+          },
+        ],
+        inlineComments: [
+          {
+            identity: 'inline:discussion-3',
+            file: 'src/app.ts',
+            line: 42,
+            severity: 'security',
+            actionability: 'required',
+            body: 'Prior inline blocker',
+            discussionId: 'discussion-3',
+            resolved: false,
+          },
+        ],
+      },
+    })
+
+    expect(prompt).toContain('**[finding:discussion-1]**')
+    expect(prompt).toContain('**[inline:discussion-3]** src/app.ts:42')
+    expect(prompt).toContain('exact typed identity shown in square brackets')
+    expect(prompt).toContain('resolved, recommended, optional, or untracked')
+    expect(prompt).toContain(
+      '"previousFindingId": "finding:<provider-thread-id>" | "inline:<provider-thread-id>"',
+    )
+    expect(prompt).not.toContain('"previousFindingId": "id-from-previous-review"')
+  })
+
   it('omits update-mode previous finding guidance for initial reviews', () => {
     const prompt = buildReviewSystemPrompt(baseInput)
 
@@ -169,6 +237,12 @@ describe('DEFAULT_REVIEW_USER_PROMPT', () => {
 
   it('contains testing policy', () => {
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Do not require or request UI/component tests')
+  })
+
+  it('requires material release or development blockers across every focus area', () => {
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Across every focus area')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('realistic material defects')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Omit theoretical risks, optional hardening')
   })
 
   it('contains AGENTS.md instruction', () => {

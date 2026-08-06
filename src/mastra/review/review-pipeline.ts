@@ -12,6 +12,7 @@ import type {
 } from '@/agents/review-harness'
 import { createReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
+import { applyBlockingReviewPolicy } from '@/mastra/review/blocking-policy'
 import { buildReviewContextPackage } from '@/mastra/review/context-package'
 import { resolveDiffBaseRef } from '@/mastra/review/diff-base'
 import { enforceFileInspection } from '@/mastra/review/inspection'
@@ -264,6 +265,7 @@ interface InvokeReviewAgentParams {
   prompt: string
   changedFiles: string[]
   context7ApiKey: string | null
+  expectedPriorBlockerIds?: readonly string[]
   harnesses?: Partial<Record<ReviewAgentHarnessId, ReviewAgentHarness>>
 }
 
@@ -312,6 +314,7 @@ const createComparisonResultPromise = (
               params.project.review.llm.thinking_level,
             instructions: params.instructions,
             prompt: comparisonPrompt,
+            expectedPriorBlockerIds: params.expectedPriorBlockerIds,
             timeoutMs: params.project.review.comparison.timeout_ms,
             context7ApiKey: params.context7ApiKey,
             signal: comparisonAbortController.signal,
@@ -342,6 +345,7 @@ const parseOrRetryFinalOutput = async (input: {
   prompt: string
   runReview: RunReviewAgent
   harness: ReviewAgentHarnessId
+  expectedPriorBlockerIds: readonly string[]
 }): Promise<{
   reviewResult: ReviewAgentResult
   validatedReview: ReviewOutputV2
@@ -349,7 +353,10 @@ const parseOrRetryFinalOutput = async (input: {
   try {
     return {
       reviewResult: input.reviewResult,
-      validatedReview: parseReviewOutputV2(input.reviewResult.output),
+      validatedReview: applyBlockingReviewPolicy(
+        parseReviewOutputV2(input.reviewResult.output),
+        input.expectedPriorBlockerIds,
+      ),
     }
   } catch (error) {
     if (!(error instanceof ReviewOutputParseError)) {
@@ -374,7 +381,10 @@ const parseOrRetryFinalOutput = async (input: {
     try {
       return {
         reviewResult: retryResult,
-        validatedReview: parseReviewOutputV2(retryResult.output),
+        validatedReview: applyBlockingReviewPolicy(
+          parseReviewOutputV2(retryResult.output),
+          input.expectedPriorBlockerIds,
+        ),
       }
     } catch (retryError) {
       if (retryError instanceof ReviewOutputParseError) {
@@ -413,6 +423,7 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
       instructions: params.instructions,
       prompt,
       changedFiles: params.changedFiles,
+      expectedPriorBlockerIds: params.expectedPriorBlockerIds,
       timeoutMs: primaryConfig.timeoutMs,
       context7ApiKey: params.context7ApiKey,
       toolMode: options?.toolMode,
@@ -438,6 +449,7 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
       prompt: params.prompt,
       runReview,
       harness: primaryConfig.harness,
+      expectedPriorBlockerIds: params.expectedPriorBlockerIds ?? [],
     })
     reviewResult = finalOutput.reviewResult
 

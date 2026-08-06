@@ -16,6 +16,7 @@ import {
 } from '@/mastra/review/diagnostics'
 import { buildReviewMemoryPromptSections } from '@/mastra/review/memory'
 import { buildPreviousReviewContext } from '@/mastra/review/previous-context'
+import { collectExpectedPriorBlockerIds } from '@/mastra/review/blocking-policy'
 import {
   buildReviewSystemPrompt,
   DEFAULT_REVIEW_USER_PROMPT,
@@ -248,6 +249,7 @@ export const reviewStep = createStep({
         prompt,
         changedFiles: reviewScopeFiles,
         context7ApiKey: inputData.context7ApiKey,
+        expectedPriorBlockerIds: collectExpectedPriorBlockerIds(previousReviewContext),
         harnesses: getReviewHarnessOverridesForTesting(),
       })
     reviewDiagnostics = applyReviewAgentDiagnostics(reviewDiagnostics, {

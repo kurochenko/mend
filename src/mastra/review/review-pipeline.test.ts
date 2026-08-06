@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { ProjectConfig } from '@/config'
 import type { ReviewAgentHarness, ReviewAgentResult } from '@/agents/review-harness'
+import { createEnsembleReviewHarness } from '@/agents/ensemble-harness'
 import { getEffectiveReviewAgentConfig, invokeReviewAgent } from '@/mastra/review/review-pipeline'
 
 const validReviewOutput = JSON.stringify({
@@ -15,6 +16,28 @@ const validReviewOutput = JSON.stringify({
   },
   findings: [],
   inlineComments: [],
+})
+
+const nonBlockingReviewOutput = JSON.stringify({
+  version: 'v2',
+  assessment: 'request_changes',
+  summary: 'Optional improvements',
+  findings: [
+    {
+      id: 'recommended-cleanup',
+      category: 'architecture',
+      severity: 'bug',
+      actionability: 'recommended',
+      scope: 'single_file',
+      title: 'Simplify this helper',
+      body: 'The helper could be shorter.',
+      files: ['src/app.ts'],
+      evidence: [{ type: 'file_line', file: 'src/app.ts', line: 1 }],
+    },
+  ],
+  inlineComments: [
+    { file: 'src/app.ts', line: 1, severity: 'suggestion', body: 'Rename this variable.' },
+  ],
 })
 
 const createProject = (overrides: Partial<ProjectConfig['review']> = {}): ProjectConfig => ({
@@ -166,6 +189,73 @@ describe('invokeReviewAgent', () => {
     expect(result.validatedReview.assessment).toBe('approve')
   })
 
+  it('normalizes non-blocking direct harness output before provider posting', async () => {
+    const result = await invokeReviewAgent({
+      project: createProject({ agent: { harness: 'codex', model: 'gpt-5' } }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: [],
+      context7ApiKey: null,
+      harnesses: {
+        codex: createHarness('codex', [{ success: true, output: nonBlockingReviewOutput }]),
+      },
+    })
+
+    expect(result.validatedReview.findings).toEqual([])
+    expect(result.validatedReview.inlineComments).toEqual([])
+    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.summary).toBe(
+      'No release- or development-blocking defects found.',
+    )
+    expect(result.validatedReview.summary).not.toContain('Optional improvements')
+  })
+
+  it('removes non-expected verdicts before the validated output reaches posting', async () => {
+    const harnessOutput = JSON.stringify({
+      version: 'v2',
+      assessment: 'approve',
+      summary: 'All blockers are fixed.',
+      findings: [],
+      inlineComments: [],
+      resolutionVerdicts: [
+        {
+          previousFindingId: 'finding:expected-thread',
+          status: 'fixed',
+          explanation: 'The expected blocker is fixed.',
+        },
+        {
+          previousFindingId: 'finding:resolved-thread',
+          status: 'partially_fixed',
+          explanation: 'This resolved thread must not receive a reply.',
+        },
+      ],
+    })
+    const result = await invokeReviewAgent({
+      project: createProject({ agent: { harness: 'codex', model: 'gpt-5' } }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: [],
+      context7ApiKey: null,
+      expectedPriorBlockerIds: ['finding:expected-thread'],
+      harnesses: {
+        codex: createHarness('codex', [{ success: true, output: harnessOutput }]),
+      },
+    })
+
+    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:expected-thread',
+        status: 'fixed',
+        explanation: 'The expected blocker is fixed.',
+      },
+    ])
+  })
+
   it('retries invalid final output once without tools', async () => {
     const toolModes: Array<'full' | 'none' | undefined> = []
     const prompts: string[] = []
@@ -312,13 +402,79 @@ describe('invokeReviewAgent', () => {
       prompt: 'review prompt',
       changedFiles: ['src/agents/ensemble-harness.ts'],
       context7ApiKey: null,
+      expectedPriorBlockerIds: ['previous-blocker'],
       harnesses: { ensemble: harness },
     })
 
     expect(result.reviewResult.harness).toBe('ensemble')
-    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.assessment).toBe('request_changes')
+    expect(result.validatedReview.summary).toBe(
+      '1 previous release- or development-blocking defect remains unresolved.',
+    )
     expect(result.inspectionResult.inspectedChangedFileCoverage).toBe(1)
     expect(calls).toBe(1)
+  })
+
+  it('preserves a fixed typed verdict through ensemble and outer policy normalization', async () => {
+    const fixedVerdictOutput = JSON.stringify({
+      version: 'v2',
+      assessment: 'approve',
+      summary: 'The prior blocker is fixed.',
+      findings: [],
+      inlineComments: [],
+      resolutionVerdicts: [
+        {
+          previousFindingId: 'finding:discussion-84',
+          status: 'fixed',
+          explanation: 'The required guard now protects the core flow.',
+        },
+      ],
+    })
+    const subHarness: ReviewAgentHarness = {
+      id: 'codex',
+      invoke: async (config) => ({
+        harness: 'codex',
+        model: config.model,
+        success: true,
+        output: config.sessionDir.includes('finder-')
+          ? JSON.stringify({ candidates: [] })
+          : fixedVerdictOutput,
+        durationMs: 1,
+        inspectedFiles: config.changedFiles,
+      }),
+    }
+    const ensemble = createEnsembleReviewHarness({
+      config: { deep_samples: 1, verify_enabled: false },
+      harnesses: { codex: subHarness },
+    })
+
+    const result = await invokeReviewAgent({
+      project: createProject({
+        agent: {
+          harness: 'ensemble',
+          model: 'gpt-5.5',
+        },
+      }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions:
+        'Review mode: consecutive update. Verify all files changed since the previous review.',
+      prompt: 'review prompt',
+      changedFiles: ['src/agents/ensemble-harness.ts'],
+      context7ApiKey: null,
+      expectedPriorBlockerIds: ['finding:discussion-84'],
+      harnesses: { ensemble },
+    })
+
+    expect(result.reviewResult.harness).toBe('ensemble')
+    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:discussion-84',
+        status: 'fixed',
+        explanation: 'The required guard now protects the core flow.',
+      },
+    ])
   })
 
   it('records comparison harness result through the same harness boundary', async () => {

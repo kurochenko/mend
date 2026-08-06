@@ -174,7 +174,10 @@ describe('ensemble prompt construction', () => {
     expect(prompt).toContain('base user prompt')
     expect(prompt).toContain('Finder role: diff-correctness')
     expect(prompt).toContain(role.addendum)
-    expect(prompt).toContain('Report every defensible suspicion')
+    expect(prompt).toContain('realistic intended-use trigger')
+    expect(prompt).toContain(
+      'Omit borderline suspicions, theoretical risks, and optional hardening',
+    )
   })
 
   it('replaces resolution verification with previous-finding guidance for update finders', () => {
@@ -228,6 +231,8 @@ describe('ensemble prompt construction', () => {
     )
     expect(instructions).toContain('"version": "v2"')
     expect(instructions).toContain('Verification stats:')
+    expect(instructions).toContain('Apply the finding eligibility gate again')
+    expect(instructions).toContain('Every emitted finding must block release')
   })
 
   it('includes the scenario-simulation finder role', () => {
@@ -530,7 +535,8 @@ describe('createEnsembleReviewHarness', () => {
     expect(result.success).toBe(true)
     expect(result.harness).toBe('ensemble')
     expect(result.model).toBe('gpt-5.5')
-    expect(result.output).toContain('Synth summary')
+    expect(result.output).toContain('No release- or development-blocking defects found.')
+    expect(result.output).not.toContain('Synth summary')
     expect(result.inspectedFiles).toEqual(['src/app.ts'])
     expect(calls.filter((call) => call.includes('finder-'))).toHaveLength(5)
     expect(calls.some((call) => call.includes('finder-scenario-simulation'))).toBe(true)
@@ -562,7 +568,8 @@ describe('createEnsembleReviewHarness', () => {
 
     expect(result.success).toBe(true)
     expect(result.harness).toBe('ensemble')
-    expect(result.output).toContain('Deep summary')
+    expect(result.output).toContain('No release- or development-blocking defects found.')
+    expect(result.output).not.toContain('Deep summary')
   })
 
   it('returns failure when synthesis fails without a valid deep fallback', async () => {
@@ -615,11 +622,23 @@ describe('detectReviewMode', () => {
 })
 
 describe('applyAssessmentPolicy', () => {
-  it('requests changes only when a bug or security severity finding exists', () => {
+  it('requests changes for every retained material severity, including performance', () => {
     const gated = applyAssessmentPolicy(
       policyOutput({
         assessment: 'approve',
-        inlineComments: [{ file: 'src/app.ts', line: 2, severity: 'bug', body: 'broken' }],
+        findings: [
+          {
+            id: 'slow-core-flow',
+            category: 'performance',
+            severity: 'performance',
+            actionability: 'required',
+            scope: 'single_file',
+            title: 'Core flow times out',
+            body: 'Ordinary usage now exceeds the service timeout.',
+            files: ['src/app.ts'],
+            evidence: [{ type: 'file_line', file: 'src/app.ts', line: 2 }],
+          },
+        ],
       }),
       { reviewMode: 'initial', changedFiles: ['src/app.ts'] },
     )
@@ -632,6 +651,7 @@ describe('applyAssessmentPolicy', () => {
       }),
       { reviewMode: 'initial', changedFiles: ['src/app.ts'] },
     )
+    expect(ungated.inlineComments).toEqual([])
     expect(ungated.assessment).toBe('approve')
   })
 
@@ -643,7 +663,7 @@ describe('applyAssessmentPolicy', () => {
     expect(result.assessment).toBe('needs_discussion')
   })
 
-  it('downgrades out-of-delta findings to optional suggestions in update mode', () => {
+  it('removes out-of-delta findings in update mode', () => {
     const result = applyAssessmentPolicy(
       policyOutput({
         findings: [
@@ -664,9 +684,8 @@ describe('applyAssessmentPolicy', () => {
       { reviewMode: 'update', changedFiles: ['src/app.ts'] },
     )
 
-    expect(result.findings[0]?.severity).toBe('suggestion')
-    expect(result.findings[0]?.actionability).toBe('optional')
-    expect(result.inlineComments[0]?.severity).toBe('suggestion')
+    expect(result.findings).toEqual([])
+    expect(result.inlineComments).toEqual([])
     expect(result.assessment).toBe('approve')
   })
 
@@ -690,6 +709,35 @@ describe('applyAssessmentPolicy', () => {
     )
     expect(result.inlineComments[0]?.severity).toBe('bug')
     expect(result.assessment).toBe('request_changes')
+  })
+
+  it('preserves expected typed resolution verdicts during ensemble normalization', () => {
+    const result = applyAssessmentPolicy(
+      policyOutput({
+        assessment: 'approve',
+        resolutionVerdicts: [
+          {
+            previousFindingId: 'finding:discussion-84',
+            status: 'fixed',
+            explanation: 'The required guard now protects the core flow.',
+          },
+        ],
+      }),
+      {
+        reviewMode: 'update',
+        changedFiles: ['src/app.ts'],
+        expectedPriorBlockerIds: ['finding:discussion-84'],
+      },
+    )
+
+    expect(result.assessment).toBe('approve')
+    expect(result.resolutionVerdicts).toEqual([
+      {
+        previousFindingId: 'finding:discussion-84',
+        status: 'fixed',
+        explanation: 'The required guard now protects the core flow.',
+      },
+    ])
   })
 })
 

@@ -32,7 +32,7 @@ const isHighPriorityFinding = (f: PreviousFinding): boolean =>
 
 const formatFindingDetailed = (f: PreviousFinding): string =>
   [
-    `- **[${f.id}]** (${f.category} / ${f.severity}) ${f.title}`,
+    `- **[${f.identity ?? f.id}]** (${f.category} / ${f.severity} / ${f.actionability}) ${f.title}`,
     `  ${f.body}`,
     f.files.length > 0 ? `  Files: ${f.files.join(', ')}` : null,
     `  Status: ${f.discussionId ? (f.resolved ? 'resolved on the code host' : 'open on the code host') : 'not tracked on the code host'}`,
@@ -41,17 +41,17 @@ const formatFindingDetailed = (f: PreviousFinding): string =>
     .join('\n')
 
 const formatFindingSummary = (f: PreviousFinding): string =>
-  `- **[${f.id}]** (${f.severity}) ${f.title} — ${f.discussionId ? (f.resolved ? 'resolved' : 'open') : 'not tracked'}`
+  `- **[${f.identity ?? f.id}]** (${f.severity} / ${f.actionability}) ${f.title} — ${f.discussionId ? (f.resolved ? 'resolved' : 'open') : 'not tracked'}`
 
 const formatInlineDetailed = (c: PreviousInlineComment): string =>
   [
-    `- ${c.file}:${c.line}`,
+    `- **[${c.identity ?? `${c.file}:${c.line}`}]** ${c.file}:${c.line}`,
     `  ${c.body}`,
     `  Status: ${c.resolved ? 'resolved on the code host' : 'unresolved'}`,
   ].join('\n')
 
 const formatInlineSummary = (c: PreviousInlineComment): string =>
-  `- ${c.file}:${c.line} — ${c.resolved ? 'resolved' : 'unresolved'}`
+  `- **[${c.identity ?? `${c.file}:${c.line}`}]** ${c.file}:${c.line} — ${c.resolved ? 'resolved' : 'unresolved'}`
 
 const buildPreviousContextSections = (ctx: PreviousReviewContext): string[] => {
   const totalItems = ctx.findings.length + ctx.inlineComments.length
@@ -102,16 +102,15 @@ const buildPreviousContextSections = (ctx: PreviousReviewContext): string[] => {
 export const RESOLUTION_INSTRUCTIONS = [
   '## Resolution Verification',
   '',
-  'For each previous inline comment and each previous finding tracked on the code host:',
+  'For each open required previous blocker tracked on the code host:',
   '- Check whether the current changes address the concern',
   '- Include a resolutionVerdicts array in your output',
-  '- For inline comments, set previousFindingId to the file:line identifier (e.g., "src/components/Table.vue:42")',
-  '- For structured findings, set previousFindingId to the stable finding id (e.g., "dup-layout")',
+  '- Set previousFindingId to the exact typed identity shown in square brackets (for example, "inline:discussion-42" or "finding:discussion-84")',
   '- Use status "fixed" only when the code change clearly addresses the concern',
   '- Use "not_fixed" when the issue persists unchanged',
   '- Use "partially_fixed" when the fix is incomplete',
   '- Use "cannot_determine" when the code changed too much to tell',
-  '- Do not include previous findings marked as not tracked on the code host in resolutionVerdicts',
+  '- Do not include resolved, recommended, optional, or untracked previous content in resolutionVerdicts',
   '- Do not let resolution checking distract from reviewing new changes — new issues take priority',
 ].join('\n')
 
@@ -269,7 +268,7 @@ const buildResolutionVerdictSchema = (hasPreviousContext: boolean): string | nul
     ? [
         '  "resolutionVerdicts": [',
         '    {',
-        '      "previousFindingId": "id-from-previous-review",',
+        '      "previousFindingId": "finding:<provider-thread-id>" | "inline:<provider-thread-id>",',
         '      "status": "fixed" | "not_fixed" | "partially_fixed" | "cannot_determine",',
         '      "explanation": "Why this status was chosen"',
         '    }',
@@ -361,9 +360,19 @@ export const buildReviewSystemPrompt = (input: SystemPromptInput): string => {
     '- Personal style preferences without practical impact',
     '- Code outside the change scope unless the MR clearly breaks it',
     '- Rewrite suggestions that do not solve a concrete problem',
+    '- Optional hardening, cleanup, simplification, or generic best-practice recommendations',
+    '- Transient inconsistencies or speculative edge cases outside realistic intended use',
+    '- Theoretical performance, reliability, concurrency, or scalability risks without a concrete material failure',
     '',
     'Scope anchoring:',
     scopeAnchoringLine,
+    '',
+    'Finding eligibility gate:',
+    '- Report an issue only when all three are established: a realistic trigger in intended or ordinary use, a concrete material consequence, and a proportionate remedy.',
+    '- Material consequences include a broken core flow, security or authorization failure, data loss or corruption, an incorrect business outcome, payment failure, a crash, or a significant regression.',
+    '- Missing safeguards qualify only when a dependency or service contract requires them, or ordinary usage makes the failure likely and material.',
+    '- Apply this gate to every category. A safer design alone is not evidence of a defect.',
+    '- Every new finding must be release- or development-blocking and use actionability "required". Do not emit "recommended" or "optional" findings.',
     '',
     'Be concise and high-signal. No low-value nits.',
     'The summary and all findings must describe only the changes visible in the diff. Files read for context are not part of this MR — do not report on them.',
@@ -384,6 +393,9 @@ export const DEFAULT_REVIEW_USER_PROMPT = [
   '- design quality and decomposition, including mostly acyclic call/dependency flow',
   '- convention adherence (cite specific rules)',
   '- non-UI test gaps for non-trivial business/domain logic',
+  '',
+  'Across every focus area, report only realistic material defects that should block release or continued development.',
+  'Omit theoretical risks, optional hardening, and best-practice improvements that do not have a concrete intended-use trigger and material consequence.',
   '',
   'Do not require or request UI/component tests.',
   'Do not suggest tests for thin wrappers around library APIs (e.g. query definitions, route configs, store setup).',

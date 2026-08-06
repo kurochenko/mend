@@ -1,4 +1,6 @@
+import { z } from 'zod'
 import type { ProjectConfig } from '@/config'
+import { listReviewFindingsForMr, type ReviewFindingRecord } from '@/db/review-findings'
 import {
   archiveActiveThreadResolvedMemoryForThread,
   createReviewMemoryEntry,
@@ -7,7 +9,6 @@ import {
 import {
   getReviewMessageByProviderMessageId,
   listReviewThreadsForMr,
-  listReviewThreadsForRun,
   updateReviewThreadStatusByProviderThreadId,
   upsertReviewMessage,
   type ReviewThreadRecord,
@@ -16,7 +17,12 @@ import { getReviewRun } from '@/db/review-runs'
 import { createReviewProvider } from '@/integrations/provider/client'
 import type { ProviderThread } from '@/integrations/provider/types'
 import type { ExistingPublishedThread } from '@/mastra/review/publish-plan'
-import { postStepOutputSchema } from '@/mastra/review/run-result'
+import {
+  buildPriorBlockerIdentity,
+  type PriorBlockerIdentity,
+} from '@/mastra/review/prior-blocker-identity'
+import { postStepOutputSchema, type PostStepOutput } from '@/mastra/review/run-result'
+import { reviewFindingSchema, reviewInlineCommentSchema } from '@/mastra/review/schema'
 import {
   collectPersistableThreads,
   findLatestHumanReply,
@@ -26,9 +32,11 @@ import {
 import { parseProviderTimestamp } from '@/lib/timestamps'
 
 export interface PreviousFinding {
+  identity: PriorBlockerIdentity | null
   id: string
   category: string
   severity: string
+  actionability: 'required' | 'recommended' | 'optional'
   title: string
   body: string
   files: string[]
@@ -37,9 +45,11 @@ export interface PreviousFinding {
 }
 
 export interface PreviousInlineComment {
+  identity: PriorBlockerIdentity | null
   file: string
   line: number
   severity: 'bug' | 'security' | 'performance' | 'suggestion'
+  actionability: 'required'
   body: string
   discussionId: string | null
   resolved: boolean
@@ -203,23 +213,33 @@ export const loadPublishedReviewThreadsForMr = async (params: {
   return [...byFingerprint.values()]
 }
 
-const buildInlineCommentKey = (comment: { file: string; line: number; body: string }): string =>
-  `${comment.file}:${comment.line}:${comment.body}`
+const trackedFindingMetadataSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('finding'), finding: reviewFindingSchema }),
+  z.object({ kind: z.literal('inline_comment'), inlineComment: reviewInlineCommentSchema }),
+])
 
-const loadStoredThreadStatus = async (params: {
-  previousRunId: string
-  platform: ProjectConfig['platform']
-}): Promise<Map<string, boolean>> => {
-  const threads = await listReviewThreadsForRun(params.previousRunId)
-  return new Map(
-    threads
-      .filter(
-        (thread) =>
-          (thread.threadKind === 'inline' || thread.threadKind === 'summary_finding') &&
-          thread.provider === params.platform,
-      )
-      .map((thread) => [thread.providerThreadId, thread.status === 'resolved'] as const),
-  )
+const blockerIdentity = (
+  kind: 'finding' | 'inline',
+  discussionId: string | null,
+): PriorBlockerIdentity | null =>
+  discussionId ? buildPriorBlockerIdentity(kind, discussionId) : null
+
+const mergeTrackedHistory = <T extends { identity: PriorBlockerIdentity | null }>(
+  historical: T[],
+  current: T[],
+): T[] => {
+  const byIdentity = new Map<PriorBlockerIdentity, T>()
+  const untracked: T[] = []
+
+  for (const item of [...historical, ...current]) {
+    if (item.identity) {
+      byIdentity.set(item.identity, item)
+    } else {
+      untracked.push(item)
+    }
+  }
+
+  return [...untracked, ...byIdentity.values()]
 }
 
 const formatFindingStatus = (params: {
@@ -281,13 +301,155 @@ const refreshThreadStatus = async (params: {
   return refreshedThreadStatus
 }
 
+interface PreviousContextItems {
+  findings: PreviousFinding[]
+  inlineComments: PreviousInlineComment[]
+}
+
+const isPersistedPseudoThreadResolution = (finding: ReviewFindingRecord): boolean =>
+  finding.provider === 'github' &&
+  finding.providerThreadId.startsWith('note_') &&
+  (finding.state === 'fixed' || finding.state === 'resolved')
+
+const applyPersistedPseudoThreadResolutions = (
+  findings: ReviewFindingRecord[],
+  threadStatus: Map<string, boolean>,
+): Map<string, boolean> => {
+  const resolvedThreadStatus = new Map(threadStatus)
+  for (const finding of findings) {
+    if (isPersistedPseudoThreadResolution(finding)) {
+      resolvedThreadStatus.set(finding.providerThreadId, true)
+    }
+  }
+  return resolvedThreadStatus
+}
+
+const buildCurrentContextItems = (
+  result: PostStepOutput,
+  threadStatus: Map<string, boolean>,
+): PreviousContextItems => {
+  const findings: PreviousFinding[] = result.findings.map((finding, index) => {
+    const status = formatFindingStatus({
+      discussionId: result.postedFindings[index]?.providerThreadId ?? null,
+      discussionIdToStatus: threadStatus,
+    })
+
+    return {
+      identity: blockerIdentity('finding', status.discussionId),
+      id: finding.id,
+      category: finding.category,
+      severity: finding.severity,
+      actionability: finding.actionability,
+      title: finding.title,
+      body: finding.body,
+      files: finding.files ?? [],
+      discussionId: status.discussionId,
+      resolved: status.resolved,
+    }
+  })
+  const threadedFindings: PreviousFinding[] = result.threadedFindings.map((finding) => ({
+    identity: blockerIdentity('finding', finding.providerThreadId),
+    id: finding.id,
+    category: finding.category,
+    severity: finding.severity,
+    actionability: finding.actionability,
+    title: finding.title,
+    body: finding.body,
+    files: finding.files ?? [],
+    discussionId: finding.providerThreadId,
+    resolved: finding.providerThreadId
+      ? (threadStatus.get(finding.providerThreadId) ?? false)
+      : false,
+  }))
+  const inlineComments: PreviousInlineComment[] = result.inlineComments.map((comment, index) => {
+    const discussionId = result.postedInlineComments[index]?.providerThreadId ?? null
+    return {
+      identity: blockerIdentity('inline', discussionId),
+      file: comment.file,
+      line: comment.line,
+      severity: comment.severity,
+      actionability: 'required',
+      body: comment.body,
+      discussionId,
+      resolved: discussionId ? (threadStatus.get(discussionId) ?? false) : false,
+    }
+  })
+  const threadedInlineComments: PreviousInlineComment[] = result.threadedInlineComments.map(
+    (comment) => ({
+      identity: blockerIdentity('inline', comment.providerThreadId),
+      file: comment.file,
+      line: comment.line,
+      severity: comment.severity,
+      actionability: 'required',
+      body: comment.body,
+      discussionId: comment.providerThreadId,
+      resolved: comment.providerThreadId
+        ? (threadStatus.get(comment.providerThreadId) ?? false)
+        : false,
+    }),
+  )
+
+  return {
+    findings: [...findings, ...threadedFindings],
+    inlineComments: [...inlineComments, ...threadedInlineComments],
+  }
+}
+
+const buildHistoricalContextItems = (
+  trackedFindings: ReviewFindingRecord[],
+  threadStatus: Map<string, boolean>,
+): PreviousContextItems => {
+  const findings: PreviousFinding[] = []
+  const inlineComments: PreviousInlineComment[] = []
+
+  for (const trackedFinding of trackedFindings) {
+    const metadata = trackedFindingMetadataSchema.safeParse(trackedFinding.metadata)
+    if (!metadata.success) {
+      continue
+    }
+
+    const discussionId = trackedFinding.providerThreadId
+    const resolved = threadStatus.get(discussionId) ?? false
+    if (metadata.data.kind === 'finding') {
+      const finding = metadata.data.finding
+      findings.push({
+        identity: buildPriorBlockerIdentity('finding', discussionId),
+        id: finding.id,
+        category: finding.category,
+        severity: finding.severity,
+        actionability: finding.actionability,
+        title: finding.title,
+        body: finding.body,
+        files: finding.files ?? [],
+        discussionId,
+        resolved,
+      })
+      continue
+    }
+
+    const inlineComment = metadata.data.inlineComment
+    inlineComments.push({
+      identity: buildPriorBlockerIdentity('inline', discussionId),
+      file: inlineComment.file,
+      line: inlineComment.line,
+      severity: inlineComment.severity,
+      actionability: 'required',
+      body: inlineComment.body,
+      discussionId,
+      resolved,
+    })
+  }
+
+  return { findings, inlineComments }
+}
+
 export const buildPreviousReviewContext = async (params: {
   project: ProjectConfig
   mrIid: number
   previousRunId: string
 }): Promise<PreviousReviewContext | null> => {
   const run = await getReviewRun(params.previousRunId)
-  if (!run || !run.result) {
+  if (!run?.result) {
     return null
   }
 
@@ -300,7 +462,10 @@ export const buildPreviousReviewContext = async (params: {
   }
 
   const result = parsed.data
-
+  const [storedThreads, trackedFindings] = await Promise.all([
+    listReviewThreadsForMr({ projectKey: params.project.key, mrIid: params.mrIid }),
+    listReviewFindingsForMr({ projectKey: params.project.key, mrIid: params.mrIid }),
+  ])
   const discussionIds = [
     ...result.postedInlineComments,
     ...result.postedFindings,
@@ -309,11 +474,17 @@ export const buildPreviousReviewContext = async (params: {
   ]
     .map((comment) => comment.providerThreadId)
     .filter((discussionId): discussionId is string => discussionId !== null)
+  discussionIds.push(...trackedFindings.map((finding) => finding.providerThreadId))
 
-  let threadStatus = await loadStoredThreadStatus({
-    previousRunId: params.previousRunId,
-    platform: params.project.platform,
-  })
+  let threadStatus = new Map(
+    storedThreads
+      .filter(
+        (thread) =>
+          isPublishedFindingThreadKind(thread.threadKind) &&
+          thread.provider === params.project.platform,
+      )
+      .map((thread) => [thread.providerThreadId, thread.status === 'resolved'] as const),
+  )
 
   if (discussionIds.length > 0) {
     try {
@@ -330,81 +501,16 @@ export const buildPreviousReviewContext = async (params: {
     }
   }
 
-  const findings: PreviousFinding[] = result.findings.map((finding, index) => {
-    const status = formatFindingStatus({
-      discussionId: result.postedFindings[index]?.providerThreadId ?? null,
-      discussionIdToStatus: threadStatus,
-    })
+  threadStatus = applyPersistedPseudoThreadResolutions(trackedFindings, threadStatus)
 
-    return {
-      id: finding.id,
-      category: finding.category,
-      severity: finding.severity,
-      title: finding.title,
-      body: finding.body,
-      files: finding.files ?? [],
-      discussionId: status.discussionId,
-      resolved: status.resolved,
-    }
-  })
-
-  const threadedFindings = result.threadedFindings
-    .filter((finding) => !findings.some((existing) => existing.id === finding.id))
-    .map((finding) => {
-      const status = formatFindingStatus({
-        discussionId: finding.providerThreadId,
-        discussionIdToStatus: threadStatus,
-      })
-
-      return {
-        id: finding.id,
-        category: finding.category,
-        severity: finding.severity,
-        title: finding.title,
-        body: finding.body,
-        files: finding.files ?? [],
-        discussionId: status.discussionId,
-        resolved: status.resolved,
-      }
-    })
-
-  const inlineComments: PreviousInlineComment[] = result.inlineComments.map((comment, index) => {
-    const postedInlineComment = result.postedInlineComments[index]
-    const discussionId = postedInlineComment?.providerThreadId ?? null
-
-    return {
-      file: comment.file,
-      line: comment.line,
-      severity: comment.severity,
-      body: comment.body,
-      discussionId,
-      resolved: discussionId ? (threadStatus.get(discussionId) ?? false) : false,
-    }
-  })
-
-  const threadedInlineComments = result.threadedInlineComments
-    .filter(
-      (comment) =>
-        !inlineComments.some(
-          (existing) => buildInlineCommentKey(existing) === buildInlineCommentKey(comment),
-        ),
-    )
-    .map((comment) => ({
-      file: comment.file,
-      line: comment.line,
-      severity: comment.severity,
-      body: comment.body,
-      discussionId: comment.providerThreadId,
-      resolved: comment.providerThreadId
-        ? (threadStatus.get(comment.providerThreadId) ?? false)
-        : false,
-    }))
+  const current = buildCurrentContextItems(result, threadStatus)
+  const historical = buildHistoricalContextItems(trackedFindings, threadStatus)
 
   return {
     previousRunId: params.previousRunId,
     previousCommitSha: run.commitSha,
     previousAssessment: result.assessment,
-    findings: [...findings, ...threadedFindings],
-    inlineComments: [...inlineComments, ...threadedInlineComments],
+    findings: mergeTrackedHistory(historical.findings, current.findings),
+    inlineComments: mergeTrackedHistory(historical.inlineComments, current.inlineComments),
   }
 }

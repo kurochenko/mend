@@ -67,12 +67,14 @@ export interface PlannedThreadResolution {
 }
 
 interface PreviousFindingForResolution {
+  identity: string | null
   id: string
   discussionId: string | null
   resolved: boolean
 }
 
 interface PreviousInlineCommentForResolution {
+  identity: string | null
   file: string
   line: number
   discussionId: string | null
@@ -354,24 +356,24 @@ const findResolvableThreadForVerdict = (
   findings: PreviousFindingForResolution[],
   inlineComments: PreviousInlineCommentForResolution[],
 ): ResolvableReviewThread | undefined => {
-  const finding = findings.find((candidate) => candidate.id === verdict.previousFindingId)
+  const finding = findings.find((candidate) => candidate.identity === verdict.previousFindingId)
   if (finding) {
     return {
-      identifier: finding.id,
+      identifier: verdict.previousFindingId,
       discussionId: finding.discussionId,
       resolved: finding.resolved,
     }
   }
 
   const inlineComment = inlineComments.find(
-    (candidate) => `${candidate.file}:${candidate.line}` === verdict.previousFindingId,
+    (candidate) => candidate.identity === verdict.previousFindingId,
   )
   if (!inlineComment) {
     return undefined
   }
 
   return {
-    identifier: `${inlineComment.file}:${inlineComment.line}`,
+    identifier: verdict.previousFindingId,
     discussionId: inlineComment.discussionId,
     resolved: inlineComment.resolved,
   }

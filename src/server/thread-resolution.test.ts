@@ -76,6 +76,7 @@ describe('executeThreadResolutions', () => {
       reviewRunId: 'run-2',
       reply: expect.objectContaining({ body: 'Verified as fixed in `abc`: done' }),
       markResolved: true,
+      markFindingResolved: true,
     })
     expect(stats).toEqual({
       resolvedThreadCount: 1,
@@ -84,8 +85,9 @@ describe('executeThreadResolutions', () => {
     })
   })
 
-  it('keeps local state unresolved when the provider cannot resolve the thread', async () => {
+  it('persists a fixed GitHub pseudo-thread finding without claiming provider resolution', async () => {
     const provider = makeProvider()
+    provider.kind = 'github'
     provider.resolveThread = mock(async () => false)
     const persistReply = mock(async () => {})
 
@@ -107,7 +109,11 @@ describe('executeThreadResolutions', () => {
     })
 
     expect(persistReply).toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: 'note_10', markResolved: false }),
+      expect.objectContaining({
+        threadId: 'note_10',
+        markResolved: false,
+        markFindingResolved: true,
+      }),
     )
     expect(stats).toEqual({
       resolvedThreadCount: 0,

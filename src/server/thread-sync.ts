@@ -130,6 +130,7 @@ export const persistProviderReplyLocally = async (params: {
   reviewRunId: string | null
   reply: ProviderThreadMessage
   markResolved: boolean
+  markFindingResolved: boolean
   dependencies?: Partial<ThreadSyncDependencies>
 }): Promise<void> => {
   const dependencies = { ...defaultDependencies, ...params.dependencies }
@@ -149,24 +150,31 @@ export const persistProviderReplyLocally = async (params: {
     dependencies,
   })
 
-  if (!params.markResolved) {
+  if (params.markResolved) {
+    await dependencies.updateReviewThreadStatusByProviderThreadId({
+      provider: params.provider,
+      providerThreadId: params.threadId,
+      status: 'resolved',
+    })
+  }
+
+  if (!params.markFindingResolved) {
     return
   }
 
-  await dependencies.updateReviewThreadStatusByProviderThreadId({
-    provider: params.provider,
-    providerThreadId: params.threadId,
-    status: 'resolved',
-  })
-
-  const finding = await dependencies.getReviewFindingByProviderThreadId({
-    provider: params.provider,
-    providerThreadId: params.threadId,
-  })
-
-  if (!finding) {
-    return
-  }
+  const finding =
+    (await dependencies.getReviewFindingByProviderThreadId({
+      provider: params.provider,
+      providerThreadId: params.threadId,
+    })) ??
+    (await dependencies.upsertReviewFinding({
+      projectKey: thread.projectKey,
+      mrIid: thread.reviewExternalId,
+      reviewRunId: thread.reviewRunId ?? params.reviewRunId,
+      threadId: thread.id,
+      provider: params.provider,
+      providerThreadId: params.threadId,
+    }))
 
   await dependencies.updateReviewFindingState({
     id: finding.id,
