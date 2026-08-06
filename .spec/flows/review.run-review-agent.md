@@ -32,7 +32,7 @@ For update reviews, Mend reconstructs every tracked finding thread across the MR
 | Provider posting | Only normalized verdicts for expected open required blockers can produce provider replies or thread resolution. |
 | Ensemble integration | Ensemble normalization preserves matching typed verdicts for the outer pipeline and cannot erase them by applying an empty expected set. |
 | Generated schema | The JSON schema requires `finding:<provider-thread-id>` or `inline:<provider-thread-id>` rather than an untyped example identifier. |
-| Fixed GitHub pseudo-thread | Persisted fixed or resolved state prevents a non-resolvable `note_` pseudo-thread from re-gating later updates. |
+| Fixed GitHub pseudo-thread | The fixed verdict persists local finding resolution through the provider-reply path; the non-resolvable `note_` provider thread remains open and is not counted as provider-resolved, while later updates do not re-gate it. |
 
 Harnesses that can disable tools retry invalid final JSON once without tools. Harnesses that cannot disable tools fail invalid final JSON instead of launching a second tool-enabled review. Optional comparison harness execution may run alongside the primary harness and is recorded separately.
 

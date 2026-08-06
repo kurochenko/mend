@@ -4,15 +4,25 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
-import { loadConfig } from '@/config'
+import { loadConfig, parseProjectsFileConfig, type GitHubProjectConfig } from '@/config'
 import { getDb } from '@/db/client'
-import { reviewFindings, reviewRuns, reviewThreads } from '@/db/schema'
+import { getReviewFindingByProviderThreadId, upsertReviewFinding } from '@/db/review-findings'
+import { reviewFindings, reviewMessages, reviewRuns, reviewThreads } from '@/db/schema'
+import { getReviewThreadByProviderThreadId, upsertReviewThread } from '@/db/review-threads'
 import { setReviewHarnessOverridesForTesting } from '@/agents/harness-overrides'
 import type { ReviewAgentHarness } from '@/agents/review-harness'
+import { createGitHubReviewProvider } from '@/integrations/provider/github'
 import { createMastra } from '@/mastra/index'
+import {
+  applyBlockingReviewPolicy,
+  collectExpectedPriorBlockerIds,
+} from '@/mastra/review/blocking-policy'
+import { buildPreviousReviewContext } from '@/mastra/review/previous-context'
+import { postStepOutputSchema } from '@/mastra/review/run-result'
 import { createGitlabWebhookRoute } from '@/server/gitlab-webhook'
 import { hasActiveReviewWorkers } from '@/server/mr-review-queue'
 import { STATUS_MARKER } from '@/server/status-note-body'
+import { executeThreadResolutions } from '@/server/thread-resolution'
 import { startFakeGitLab, type FakeGitLabServer } from './fake-gitlab'
 import { connectTestDb, disconnectTestDb, truncateReviewFlowTables } from './helpers/db'
 import { createTestGitOrigin, type TestGitOrigin } from './helpers/git'
@@ -20,6 +30,7 @@ import { createTestGitOrigin, type TestGitOrigin } from './helpers/git'
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const projectKey = 'e2e-project'
 const webhookSecret = 'e2e-secret'
+const githubProjectKey = 'github-e2e-project'
 
 const reviewOutput = JSON.stringify({
   version: 'v2',
@@ -155,6 +166,117 @@ const makeMrPayload = (fake: FakeGitLabServer) => ({
   labels: [],
 })
 
+const makeGitHubProject = (url: string): GitHubProjectConfig => {
+  const parsed = parseProjectsFileConfig({
+    projects: {
+      [githubProjectKey]: {
+        platform: 'github',
+        url,
+        token: 'test-token',
+        webhook_secret: 'test-secret',
+        repo: 'org/repo',
+        repo_url: `${url}/org/repo.git`,
+        default_branch: 'main',
+        trigger: { mode: 'ready' },
+        tools: {},
+        review: { llm: { model: 'test/model', thinking_level: 'medium' } },
+      },
+    },
+  }).projects[githubProjectKey]
+
+  if (parsed?.platform !== 'github') {
+    throw new Error('GitHub E2E project config did not parse')
+  }
+
+  return { ...parsed, key: githubProjectKey, clone_path: '/tmp/github-e2e' }
+}
+
+const makeGitHubPreviousResult = () =>
+  postStepOutputSchema.parse({
+    version: 'v2',
+    projectKey: githubProjectKey,
+    mrIid: 42,
+    reviewRunId: 'github-previous-run',
+    url: 'https://github.example/org/repo/pull/42',
+    commitSha: 'previous-sha',
+    reviewMode: 'update',
+    previousReviewedSha: 'older-sha',
+    previousRunId: 'older-run',
+    reviewIntent: 'mixed',
+    reviewIntentConfidence: 1,
+    reviewIntentRationale: ['test fixture'],
+    reviewTemplateId: 'mixed',
+    reviewTemplateSource: 'fallback',
+    assessment: 'request_changes',
+    summary: 'One previous blocker remains.',
+    findings: [],
+    inlineComments: [],
+    resolutionVerdicts: [],
+    featureFlags: {
+      promptTemplatesV2: true,
+      schemaV2: true,
+      structuredFindingsPost: true,
+      structuralSignals: true,
+      bugHistory: true,
+      dryRun: false,
+    },
+    reviewDiagnostics: {
+      reviewMode: 'update',
+      previousReviewedSha: 'older-sha',
+      diffBaseRef: 'older-sha',
+      changedFileCount: 1,
+      diffExcerptChars: 100,
+      diffTruncated: false,
+      intentClassifierModel: 'test/model',
+      intentClassifierDurationMs: 1,
+      intentClassifierFailure: null,
+      intentSecondaryIntents: [],
+      agent: { harness: 'pi', model: 'test/model', durationMs: 1 },
+      inspection: {
+        files: ['src/github.ts'],
+        changedFiles: ['src/github.ts'],
+        changedFileCount: 1,
+        changedFileCoverage: 1,
+      },
+      contextPackageDiagnostics: [],
+      templateWarnings: [],
+    },
+    comparisonResult: null,
+    threadedFindings: [
+      {
+        id: 'github-summary-blocker',
+        category: 'correctness',
+        severity: 'bug',
+        actionability: 'required',
+        scope: 'cross_file',
+        title: 'GitHub summary blocker',
+        body: 'The ordinary flow is broken.',
+        files: ['src/github.ts'],
+        evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+        providerThreadId: 'note_55',
+        providerMessageId: '55',
+      },
+    ],
+    postDiagnostics: {
+      findingsCount: 0,
+      outOfScopeFindingCount: 0,
+      inlineCommentCount: 0,
+      outOfScopeInlineCount: 0,
+      postedInlineCount: 0,
+      preExistingDraftCount: 0,
+      recoveredDraftCount: 0,
+      draftRecoveryAction: 'none',
+      skippedInlineReasons: {},
+      resolvedThreadCount: 0,
+      partiallyFixedThreadCount: 0,
+      unmatchedVerdictCount: 0,
+    },
+    posted: 0,
+    skipped: 0,
+    reviewNumber: 2,
+    summaryNoteId: 1,
+  })
+
 const waitFor = async <T>(probe: () => T | null, label: string): Promise<T> => {
   const deadline = Date.now() + 10_000
 
@@ -211,6 +333,7 @@ if (!testDatabaseUrl) {
   describe('review flow e2e', () => {
     let fake: FakeGitLabServer | null = null
     let gitOrigin: TestGitOrigin | null = null
+    let githubServer: ReturnType<typeof Bun.serve> | null = null
     let root: string | null = null
     const originalCwd = process.cwd()
     const originalProjectsConfig = process.env.PROJECTS_CONFIG
@@ -247,12 +370,14 @@ if (!testDatabaseUrl) {
         process.env.DATABASE_URL = originalDatabaseUrl
       }
       await fake?.stop()
+      githubServer?.stop(true)
       gitOrigin?.cleanup()
       if (root) {
         rmSync(root, { recursive: true, force: true })
       }
       fake = null
       gitOrigin = null
+      githubServer = null
       root = null
       await truncateReviewFlowTables()
     })
@@ -354,6 +479,157 @@ if (!testDatabaseUrl) {
       expect(findingRows).toHaveLength(2)
       expect(threadRows.length).toBeGreaterThanOrEqual(2)
       expect(findingRows.map((row) => row.reviewRunId)).toEqual([run.id, run.id])
+    })
+
+    test('persists a fixed GitHub pseudo-thread finding without re-gating the next update', async () => {
+      const comments = [
+        {
+          id: 55,
+          body: 'Original Mend finding',
+          user: { id: 1, login: 'mend-bot' },
+          created_at: '2026-08-06T12:00:00Z',
+          updated_at: '2026-08-06T12:00:00Z',
+        },
+      ]
+      githubServer = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch: async (request) => {
+          const url = new URL(request.url)
+          if (request.method === 'POST' && url.pathname === '/api/graphql') {
+            return Response.json({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      nodes: [],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            })
+          }
+          if (url.pathname === '/api/v3/repos/org/repo/issues/42/comments') {
+            if (request.method === 'POST') {
+              const payload = (await request.json()) as { body: string }
+              const reply = {
+                id: 56,
+                body: payload.body,
+                user: { id: 1, login: 'mend-bot' },
+                created_at: '2026-08-06T12:05:00Z',
+                updated_at: '2026-08-06T12:05:00Z',
+              }
+              comments.push(reply)
+              return Response.json(reply, { status: 201 })
+            }
+            if (request.method === 'GET') {
+              return Response.json(comments)
+            }
+          }
+          return new Response('not found', { status: 404 })
+        },
+      })
+
+      const project = makeGitHubProject(`http://127.0.0.1:${githubServer.port}`)
+      const previousResult = makeGitHubPreviousResult()
+      await getDb().insert(reviewRuns).values({
+        id: 'github-previous-run',
+        projectKey: githubProjectKey,
+        mrIid: 42,
+        commitSha: 'previous-sha',
+        model: 'test/model',
+        source: 'webhook',
+        status: 'success',
+        input: {},
+        result: previousResult,
+      })
+      const thread = await upsertReviewThread({
+        provider: 'github',
+        projectKey: githubProjectKey,
+        repoExternalId: 'org/repo',
+        reviewExternalId: 42,
+        reviewRunId: 'github-previous-run',
+        threadKind: 'summary_finding',
+        subjectType: 'general',
+        findingFingerprint: 'summary_finding:github-summary-blocker',
+        status: 'open',
+        providerThreadId: 'note_55',
+      })
+      await upsertReviewFinding({
+        projectKey: githubProjectKey,
+        mrIid: 42,
+        reviewRunId: 'github-previous-run',
+        threadId: thread.id,
+        provider: 'github',
+        providerThreadId: 'note_55',
+        providerNoteId: '55',
+        metadata: {
+          kind: 'finding',
+          finding: previousResult.threadedFindings[0],
+        },
+      })
+
+      const stats = await executeThreadResolutions({
+        provider: createGitHubReviewProvider(project),
+        mrIid: 42,
+        reviewRunId: 'github-fixed-run',
+        unmatchedVerdictCount: 0,
+        resolutions: [
+          {
+            previousFindingId: 'finding:note_55',
+            discussionId: 'note_55',
+            status: 'fixed',
+            replyBody: 'Verified as fixed in `fixed-sha`: ordinary usage now succeeds.',
+            markResolved: true,
+          },
+        ],
+      })
+
+      const persistedFinding = await getReviewFindingByProviderThreadId({
+        provider: 'github',
+        providerThreadId: 'note_55',
+      })
+      const persistedThread = await getReviewThreadByProviderThreadId({
+        provider: 'github',
+        providerThreadId: 'note_55',
+      })
+      const persistedReplies = await getDb()
+        .select()
+        .from(reviewMessages)
+        .where(eq(reviewMessages.threadId, thread.id))
+      const nextContext = await buildPreviousReviewContext({
+        project,
+        mrIid: 42,
+        previousRunId: 'github-previous-run',
+      })
+      const expectedPriorBlockerIds = collectExpectedPriorBlockerIds(nextContext)
+      const nextReview = applyBlockingReviewPolicy(
+        {
+          version: 'v2',
+          assessment: 'request_changes',
+          summary: 'Previous blocker status pending.',
+          findings: [],
+          inlineComments: [],
+          resolutionVerdicts: [],
+        },
+        expectedPriorBlockerIds,
+      )
+
+      expect(comments).toHaveLength(2)
+      expect(persistedReplies).toHaveLength(1)
+      expect(persistedFinding?.state).toBe('resolved')
+      expect(persistedThread?.status).toBe('open')
+      expect(stats).toEqual({
+        resolvedThreadCount: 0,
+        partiallyFixedThreadCount: 1,
+        unmatchedVerdictCount: 0,
+      })
+      expect(nextContext?.findings).toContainEqual(
+        expect.objectContaining({ identity: 'finding:note_55', resolved: true }),
+      )
+      expect(expectedPriorBlockerIds).toEqual([])
+      expect(nextReview.assessment).toBe('approve')
     })
   })
 }
