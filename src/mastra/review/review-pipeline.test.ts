@@ -357,11 +357,15 @@ describe('invokeReviewAgent', () => {
       prompt: 'review prompt',
       changedFiles: ['src/agents/ensemble-harness.ts'],
       context7ApiKey: null,
+      expectedPriorBlockerIds: ['previous-blocker'],
       harnesses: { ensemble: harness },
     })
 
     expect(result.reviewResult.harness).toBe('ensemble')
-    expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.assessment).toBe('request_changes')
+    expect(result.validatedReview.summary).toBe(
+      '1 previous release- or development-blocking defect remains unresolved.',
+    )
     expect(result.inspectionResult.inspectedChangedFileCoverage).toBe(1)
     expect(calls).toBe(1)
   })

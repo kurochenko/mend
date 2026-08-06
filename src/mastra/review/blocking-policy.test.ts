@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { applyBlockingReviewPolicy } from '@/mastra/review/blocking-policy'
+import {
+  applyBlockingReviewPolicy,
+  collectExpectedPriorBlockerIds,
+} from '@/mastra/review/blocking-policy'
 import type { ReviewOutputV2 } from '@/mastra/review/schema'
 
 const finding = (
@@ -110,6 +113,7 @@ describe('applyBlockingReviewPolicy', () => {
           },
         ],
       }),
+      ['previous-blocker'],
     )
 
     expect(result.assessment).toBe('request_changes')
@@ -131,10 +135,62 @@ describe('applyBlockingReviewPolicy', () => {
           },
         ],
       }),
+      ['previous-blocker'],
     )
 
     expect(result.assessment).toBe('approve')
     expect(result.summary).toBe('No release- or development-blocking defects found.')
+  })
+
+  it('ignores verdicts that do not match an expected prior blocker', () => {
+    const result = applyBlockingReviewPolicy(
+      output({
+        assessment: 'request_changes',
+        resolutionVerdicts: [
+          {
+            previousFindingId: 'invented-blocker',
+            status: 'not_fixed',
+            explanation: 'This identifier is not present in previous context.',
+          },
+        ],
+      }),
+    )
+
+    expect(result.assessment).toBe('approve')
+    expect(result.summary).toBe('No release- or development-blocking defects found.')
+  })
+
+  it('keeps approval blocked when an expected prior blocker verdict is omitted', () => {
+    const result = applyBlockingReviewPolicy(output({ assessment: 'approve' }), [
+      'previous-blocker',
+    ])
+
+    expect(result.assessment).toBe('request_changes')
+    expect(result.summary).toBe(
+      '1 previous release- or development-blocking defect remains unresolved.',
+    )
+  })
+
+  it('does not let an unmatched verdict override a fixed expected blocker', () => {
+    const result = applyBlockingReviewPolicy(
+      output({
+        resolutionVerdicts: [
+          {
+            previousFindingId: 'previous-blocker',
+            status: 'fixed',
+            explanation: 'The tracked blocker is fixed.',
+          },
+          {
+            previousFindingId: 'invented-blocker',
+            status: 'not_fixed',
+            explanation: 'This identifier is not present in previous context.',
+          },
+        ],
+      }),
+      ['previous-blocker'],
+    )
+
+    expect(result.assessment).toBe('approve')
   })
 
   it('retains needs discussion when there are no blocking findings', () => {
@@ -144,5 +200,64 @@ describe('applyBlockingReviewPolicy', () => {
     expect(result.summary).toBe(
       'Review requires discussion; no release- or development-blocking defects were retained.',
     )
+  })
+})
+
+describe('collectExpectedPriorBlockerIds', () => {
+  it('returns only open tracked material findings and inline comments', () => {
+    const result = collectExpectedPriorBlockerIds({
+      findings: [
+        {
+          id: 'open-finding',
+          category: 'correctness',
+          severity: 'bug',
+          title: 'Open finding',
+          body: 'body',
+          files: ['src/app.ts'],
+          discussionId: 'discussion-1',
+          resolved: false,
+        },
+        {
+          id: 'resolved-finding',
+          category: 'correctness',
+          severity: 'bug',
+          title: 'Resolved finding',
+          body: 'body',
+          files: ['src/app.ts'],
+          discussionId: 'discussion-2',
+          resolved: true,
+        },
+        {
+          id: 'untracked-finding',
+          category: 'correctness',
+          severity: 'bug',
+          title: 'Untracked finding',
+          body: 'body',
+          files: ['src/app.ts'],
+          discussionId: null,
+          resolved: false,
+        },
+      ],
+      inlineComments: [
+        {
+          file: 'src/app.ts',
+          line: 7,
+          severity: 'security',
+          body: 'Open inline blocker',
+          discussionId: 'discussion-3',
+          resolved: false,
+        },
+        {
+          file: 'src/app.ts',
+          line: 8,
+          severity: 'suggestion',
+          body: 'Open inline suggestion',
+          discussionId: 'discussion-4',
+          resolved: false,
+        },
+      ],
+    })
+
+    expect(result).toEqual(['open-finding', 'src/app.ts:7'])
   })
 })

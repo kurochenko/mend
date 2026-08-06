@@ -265,6 +265,7 @@ interface InvokeReviewAgentParams {
   prompt: string
   changedFiles: string[]
   context7ApiKey: string | null
+  expectedPriorBlockerIds?: readonly string[]
   harnesses?: Partial<Record<ReviewAgentHarnessId, ReviewAgentHarness>>
 }
 
@@ -343,6 +344,7 @@ const parseOrRetryFinalOutput = async (input: {
   prompt: string
   runReview: RunReviewAgent
   harness: ReviewAgentHarnessId
+  expectedPriorBlockerIds: readonly string[]
 }): Promise<{
   reviewResult: ReviewAgentResult
   validatedReview: ReviewOutputV2
@@ -350,7 +352,10 @@ const parseOrRetryFinalOutput = async (input: {
   try {
     return {
       reviewResult: input.reviewResult,
-      validatedReview: applyBlockingReviewPolicy(parseReviewOutputV2(input.reviewResult.output)),
+      validatedReview: applyBlockingReviewPolicy(
+        parseReviewOutputV2(input.reviewResult.output),
+        input.expectedPriorBlockerIds,
+      ),
     }
   } catch (error) {
     if (!(error instanceof ReviewOutputParseError)) {
@@ -375,7 +380,10 @@ const parseOrRetryFinalOutput = async (input: {
     try {
       return {
         reviewResult: retryResult,
-        validatedReview: applyBlockingReviewPolicy(parseReviewOutputV2(retryResult.output)),
+        validatedReview: applyBlockingReviewPolicy(
+          parseReviewOutputV2(retryResult.output),
+          input.expectedPriorBlockerIds,
+        ),
       }
     } catch (retryError) {
       if (retryError instanceof ReviewOutputParseError) {
@@ -439,6 +447,7 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
       prompt: params.prompt,
       runReview,
       harness: primaryConfig.harness,
+      expectedPriorBlockerIds: params.expectedPriorBlockerIds ?? [],
     })
     reviewResult = finalOutput.reviewResult
 
