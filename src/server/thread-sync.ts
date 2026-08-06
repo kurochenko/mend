@@ -162,14 +162,19 @@ export const persistProviderReplyLocally = async (params: {
     return
   }
 
-  const finding = await dependencies.getReviewFindingByProviderThreadId({
-    provider: params.provider,
-    providerThreadId: params.threadId,
-  })
-
-  if (!finding) {
-    return
-  }
+  const finding =
+    (await dependencies.getReviewFindingByProviderThreadId({
+      provider: params.provider,
+      providerThreadId: params.threadId,
+    })) ??
+    (await dependencies.upsertReviewFinding({
+      projectKey: thread.projectKey,
+      mrIid: thread.reviewExternalId,
+      reviewRunId: thread.reviewRunId ?? params.reviewRunId,
+      threadId: thread.id,
+      provider: params.provider,
+      providerThreadId: params.threadId,
+    }))
 
   await dependencies.updateReviewFindingState({
     id: finding.id,

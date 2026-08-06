@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { loadConfig, parseProjectsFileConfig, type GitHubProjectConfig } from '@/config'
 import { getDb } from '@/db/client'
-import { getReviewFindingByProviderThreadId, upsertReviewFinding } from '@/db/review-findings'
+import { getReviewFindingByProviderThreadId } from '@/db/review-findings'
 import { reviewFindings, reviewMessages, reviewRuns, reviewThreads } from '@/db/schema'
 import { getReviewThreadByProviderThreadId, upsertReviewThread } from '@/db/review-threads'
 import { setReviewHarnessOverridesForTesting } from '@/agents/harness-overrides'
@@ -556,20 +556,6 @@ if (!testDatabaseUrl) {
         status: 'open',
         providerThreadId: 'note_55',
       })
-      await upsertReviewFinding({
-        projectKey: githubProjectKey,
-        mrIid: 42,
-        reviewRunId: 'github-previous-run',
-        threadId: thread.id,
-        provider: 'github',
-        providerThreadId: 'note_55',
-        providerNoteId: '55',
-        metadata: {
-          kind: 'finding',
-          finding: previousResult.threadedFindings[0],
-        },
-      })
-
       const stats = await executeThreadResolutions({
         provider: createGitHubReviewProvider(project),
         mrIid: 42,
