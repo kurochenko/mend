@@ -330,7 +330,10 @@ if (!testDatabaseUrl) {
       const summaryNote = fake.state.notes.find((note) =>
         note.body.includes('<!-- mend:summary -->'),
       )
-      expect(summaryNote?.body).toContain('The review flow found one inline issue')
+      expect(summaryNote?.body).toContain(
+        'Review found 2 release- or development-blocking defects.',
+      )
+      expect(summaryNote?.body).not.toContain('The review flow found one inline issue')
 
       const summaryFindingDiscussion = fake.state.discussions.find((discussion) =>
         discussion.notes[0]?.body.includes('New feature needs coverage'),
