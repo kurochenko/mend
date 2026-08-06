@@ -174,7 +174,10 @@ describe('ensemble prompt construction', () => {
     expect(prompt).toContain('base user prompt')
     expect(prompt).toContain('Finder role: diff-correctness')
     expect(prompt).toContain(role.addendum)
-    expect(prompt).toContain('Report every defensible suspicion')
+    expect(prompt).toContain('realistic intended-use trigger')
+    expect(prompt).toContain(
+      'Omit borderline suspicions, theoretical risks, and optional hardening',
+    )
   })
 
   it('replaces resolution verification with previous-finding guidance for update finders', () => {
@@ -228,6 +231,8 @@ describe('ensemble prompt construction', () => {
     )
     expect(instructions).toContain('"version": "v2"')
     expect(instructions).toContain('Verification stats:')
+    expect(instructions).toContain('Apply the finding eligibility gate again')
+    expect(instructions).toContain('Every emitted finding must block release')
   })
 
   it('includes the scenario-simulation finder role', () => {

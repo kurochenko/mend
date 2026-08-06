@@ -118,6 +118,14 @@ describe('buildReviewSystemPrompt', () => {
     expect(prompt).toContain('Formatting, whitespace, and import ordering')
     expect(prompt).toContain('Scope anchoring:')
     expect(prompt).toContain('Do not invent findings to satisfy categories')
+    expect(prompt).toContain('Finding eligibility gate:')
+    expect(prompt).toContain('a realistic trigger in intended or ordinary use')
+    expect(prompt).toContain('concrete material consequence')
+    expect(prompt).toContain('Every new finding must be release- or development-blocking')
+    expect(prompt).toContain('Do not emit "recommended" or "optional" findings')
+    expect(prompt).toContain(
+      'Theoretical performance, reliability, concurrency, or scalability risks',
+    )
     expect(prompt).toContain('Do not report the same issue in both findings and inlineComments')
     expect(prompt).toContain(
       'If the issue can be anchored to a specific diff line, prefer inlineComments',
@@ -169,6 +177,12 @@ describe('DEFAULT_REVIEW_USER_PROMPT', () => {
 
   it('contains testing policy', () => {
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Do not require or request UI/component tests')
+  })
+
+  it('requires material release or development blockers across every focus area', () => {
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Across every focus area')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('realistic material defects')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Omit theoretical risks, optional hardening')
   })
 
   it('contains AGENTS.md instruction', () => {

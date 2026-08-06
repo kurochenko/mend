@@ -134,7 +134,7 @@ export const finderRoles: FinderRole[] = [
   {
     id: 'diff-correctness',
     addendum:
-      'Focus exclusively on the diff hunks and their enclosing functions. Hunt logic bugs, edge cases, broken contracts, regressions.',
+      'Focus exclusively on the diff hunks and their enclosing functions. Identify logic bugs, broken contracts, and regressions only when a realistic intended-use execution has a material consequence.',
   },
   {
     id: 'cross-file-impact',
@@ -144,17 +144,17 @@ export const finderRoles: FinderRole[] = [
   {
     id: 'tests-adequacy',
     addendum:
-      'Read the changed code and its tests and judge whether the amount of testing is proportionate to the behavior, in both directions. Hunt untested branches and bug-fixes lacking regression tests, AND flag over-testing per the Over-Testing Smells guidance (tests that guard nothing beyond a compile error, change-detector tests, scaffolding out of proportion, redundant cases). Do not request tests for trivially-correct code such as a useEffect that only wires a subscription or sets a title.',
+      'Read the changed code and its tests. Report a test gap only when material behavior is realistically likely to regress unnoticed; do not report test style, test quantity, over-testing, or coverage improvements as findings.',
   },
   {
     id: 'conventions-structure',
     addendum:
-      "Check project conventions (instructions above) and the Structural signals section. Triage structural regressions worth human attention, and flag over-engineering per the Over-Engineering Smells guidance — abstraction, indirection, or configurability beyond the change's actual requirements — always naming the simpler construct that would suffice.",
+      'Check project conventions and the Structural signals section. Report a convention or structural issue only when the current change creates a realistic material blocker; do not report optional simplification, over-engineering, abstraction, indirection, or configurability advice.',
   },
   {
     id: 'scenario-simulation',
     addendum:
-      'Identify every state transition, retry loop, time/date boundary, timezone conversion, pagination cursor, and concurrency interaction this diff touches. For each, walk through 2-3 concrete executions step by step (specific inputs, specific clock times, repeated calls) and report where the traced behavior diverges from the intended behavior. Prefer boundary values: midnight crossings, empty sets, first/last items, repeated retries of the same operation, two actors acting at once.',
+      'Trace ordinary intended-use state transitions, retries, time boundaries, pagination, and concurrency interactions. Report only executions that are realistically reachable and cause a material failure. Do not manufacture unusual schedules, races, or scale assumptions merely because defensive handling is absent.',
   },
 ]
 
@@ -312,7 +312,7 @@ export const buildFinderPrompt = (
     `Finder role: ${role.id}`,
     role.addendum,
     ...assignedFilesAddendum(assignedFiles),
-    'Report every defensible suspicion -- a separate verification stage filters false positives. Do not self-censor borderline findings. Every candidate still requires concrete evidence: exact file and line plus a specific claim someone could check.',
+    'Return a candidate only when you can establish a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Omit borderline suspicions, theoretical risks, and optional hardening even if a safer design exists. Every candidate requires exact file and line evidence plus the failing execution and consequence.',
     'Return only candidate findings in the reduced finder JSON schema. Do not emit assessment, summary, meta, inlineComments, or resolutionVerdicts.',
   ].join('\n')
 
@@ -564,7 +564,7 @@ export const buildVerifierPrompt = (input: {
 }): string =>
   [
     'Adversarially verify this code-review finding. Read the cited code with tools if needed.',
-    'Refute ONLY with concrete evidence: the code already handles it, the claim misreads the code, or the scenario is impossible. Uncertain means you could not disprove it.',
+    'Confirm only if the candidate proves a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Refute it when any element is speculative, transient, optional, or merely generic hardening. Uncertain means the material defect was not established.',
     'Output JSON {"verdict": "confirmed" | "refuted" | "uncertain", "reason": "..."} with no other text.',
     '',
     'Candidate:',
@@ -635,7 +635,7 @@ export const buildSynthesizerInstructions = (input: {
       : 'If the base prompt does not contain previous-review context, return an empty resolutionVerdicts array or omit it.'
   const updateModeInstruction =
     input.reviewMode === 'update'
-      ? 'This is a consecutive UPDATE review. Its purpose is to verify previous findings were addressed and to check the new delta — not to re-audit the whole MR. Report a new finding with severity bug or security ONLY when it is introduced by the delta or is a verified defect that blocks merging; anything else belongs in suggestions. If the delta addresses the previous findings and introduces no new defects, approve.'
+      ? 'This is a consecutive UPDATE review. Its purpose is to verify previous findings were addressed and to check the new delta — not to re-audit the whole MR. Report a new finding only when the delta introduces a verified material defect that blocks merging. Omit everything else. If the delta addresses the previous findings and introduces no new defects, approve.'
       : null
 
   return [
@@ -643,8 +643,8 @@ export const buildSynthesizerInstructions = (input: {
     '',
     '## Ensemble Candidate Synthesis',
     '',
-    'Surviving candidates have already passed the ensemble verification stage. Do not silently drop a surviving candidate unless it is a true duplicate of another finding. This is especially strict for confirmed candidates.',
-    'Candidates whose verification verdict is uncertain carry severity suggestion; keep them as suggestions and do not escalate their severity.',
+    'Apply the finding eligibility gate again. Keep only candidates with a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Drop theoretical risks, optional hardening, generic best-practice gaps, and non-blocking suggestions even if an earlier stage retained them.',
+    'Every emitted finding must block release or continued development and use actionability required. It is valid and preferred to emit zero findings.',
     'Never invent new findings beyond the candidate list.',
     previousContextInstruction,
     updateModeInstruction,
