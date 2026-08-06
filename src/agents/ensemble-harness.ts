@@ -10,6 +10,7 @@ import type {
 } from '@/agents/review-harness'
 import { toErrorMessage } from '@/lib/errors'
 import { extractJson } from '@/lib/json'
+import { applyBlockingReviewPolicy } from '@/mastra/review/blocking-policy'
 import {
   FINDER_PREVIOUS_FINDINGS_GUIDANCE,
   RESOLUTION_INSTRUCTIONS,
@@ -683,8 +684,6 @@ export type EnsembleReviewMode = 'initial' | 'update'
 export const detectReviewMode = (instructions: string): EnsembleReviewMode =>
   instructions.includes('Review mode: consecutive update') ? 'update' : 'initial'
 
-const gateSeverities = new Set(['bug', 'security'])
-
 const isInDelta = (files: string[], changedFiles: string[]): boolean =>
   files.length === 0 || files.some((file) => changedFiles.includes(file))
 
@@ -692,33 +691,16 @@ export const applyAssessmentPolicy = (
   output: ReviewOutputV2,
   params: { reviewMode: EnsembleReviewMode; changedFiles: string[] },
 ): ReviewOutputV2 => {
-  const applyDeltaDowngrade = params.reviewMode === 'update' && params.changedFiles.length > 0
+  const applyDeltaFilter = params.reviewMode === 'update' && params.changedFiles.length > 0
 
-  const findings = output.findings.map((finding) => {
-    if (!applyDeltaDowngrade || isInDelta(finding.files ?? [], params.changedFiles)) {
-      return finding
-    }
-    return { ...finding, severity: 'suggestion' as const, actionability: 'optional' as const }
-  })
+  const findings = applyDeltaFilter
+    ? output.findings.filter((finding) => isInDelta(finding.files ?? [], params.changedFiles))
+    : output.findings
+  const inlineComments = applyDeltaFilter
+    ? output.inlineComments.filter((comment) => isInDelta([comment.file], params.changedFiles))
+    : output.inlineComments
 
-  const inlineComments = output.inlineComments.map((comment) => {
-    if (!applyDeltaDowngrade || isInDelta([comment.file], params.changedFiles)) {
-      return comment
-    }
-    return { ...comment, severity: 'suggestion' as const }
-  })
-
-  const hasGateFinding =
-    findings.some((finding) => gateSeverities.has(finding.severity)) ||
-    inlineComments.some((comment) => gateSeverities.has(comment.severity))
-
-  const assessment = hasGateFinding
-    ? ('request_changes' as const)
-    : output.assessment === 'needs_discussion'
-      ? ('needs_discussion' as const)
-      : ('approve' as const)
-
-  return { ...output, findings, inlineComments, assessment }
+  return applyBlockingReviewPolicy({ ...output, findings, inlineComments })
 }
 
 const applyPolicyToResult = (

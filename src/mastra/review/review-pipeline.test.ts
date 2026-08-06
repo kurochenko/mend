@@ -17,6 +17,28 @@ const validReviewOutput = JSON.stringify({
   inlineComments: [],
 })
 
+const nonBlockingReviewOutput = JSON.stringify({
+  version: 'v2',
+  assessment: 'request_changes',
+  summary: 'Optional improvements',
+  findings: [
+    {
+      id: 'recommended-cleanup',
+      category: 'architecture',
+      severity: 'bug',
+      actionability: 'recommended',
+      scope: 'single_file',
+      title: 'Simplify this helper',
+      body: 'The helper could be shorter.',
+      files: ['src/app.ts'],
+      evidence: [{ type: 'file_line', file: 'src/app.ts', line: 1 }],
+    },
+  ],
+  inlineComments: [
+    { file: 'src/app.ts', line: 1, severity: 'suggestion', body: 'Rename this variable.' },
+  ],
+})
+
 const createProject = (overrides: Partial<ProjectConfig['review']> = {}): ProjectConfig => ({
   key: 'test',
   clone_path: '/tmp/test',
@@ -163,6 +185,25 @@ describe('invokeReviewAgent', () => {
 
     expect(result.reviewResult.harness).toBe('codex')
     expect(result.reviewResult.model).toBe('gpt-5')
+    expect(result.validatedReview.assessment).toBe('approve')
+  })
+
+  it('normalizes non-blocking direct harness output before provider posting', async () => {
+    const result = await invokeReviewAgent({
+      project: createProject({ agent: { harness: 'codex', model: 'gpt-5' } }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: [],
+      context7ApiKey: null,
+      harnesses: {
+        codex: createHarness('codex', [{ success: true, output: nonBlockingReviewOutput }]),
+      },
+    })
+
+    expect(result.validatedReview.findings).toEqual([])
+    expect(result.validatedReview.inlineComments).toEqual([])
     expect(result.validatedReview.assessment).toBe('approve')
   })
 

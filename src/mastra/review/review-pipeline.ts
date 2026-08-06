@@ -12,6 +12,7 @@ import type {
 } from '@/agents/review-harness'
 import { createReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
+import { applyBlockingReviewPolicy } from '@/mastra/review/blocking-policy'
 import { buildReviewContextPackage } from '@/mastra/review/context-package'
 import { resolveDiffBaseRef } from '@/mastra/review/diff-base'
 import { enforceFileInspection } from '@/mastra/review/inspection'
@@ -349,7 +350,7 @@ const parseOrRetryFinalOutput = async (input: {
   try {
     return {
       reviewResult: input.reviewResult,
-      validatedReview: parseReviewOutputV2(input.reviewResult.output),
+      validatedReview: applyBlockingReviewPolicy(parseReviewOutputV2(input.reviewResult.output)),
     }
   } catch (error) {
     if (!(error instanceof ReviewOutputParseError)) {
@@ -374,7 +375,7 @@ const parseOrRetryFinalOutput = async (input: {
     try {
       return {
         reviewResult: retryResult,
-        validatedReview: parseReviewOutputV2(retryResult.output),
+        validatedReview: applyBlockingReviewPolicy(parseReviewOutputV2(retryResult.output)),
       }
     } catch (retryError) {
       if (retryError instanceof ReviewOutputParseError) {
