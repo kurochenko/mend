@@ -535,7 +535,8 @@ describe('createEnsembleReviewHarness', () => {
     expect(result.success).toBe(true)
     expect(result.harness).toBe('ensemble')
     expect(result.model).toBe('gpt-5.5')
-    expect(result.output).toContain('Synth summary')
+    expect(result.output).toContain('No release- or development-blocking defects found.')
+    expect(result.output).not.toContain('Synth summary')
     expect(result.inspectedFiles).toEqual(['src/app.ts'])
     expect(calls.filter((call) => call.includes('finder-'))).toHaveLength(5)
     expect(calls.some((call) => call.includes('finder-scenario-simulation'))).toBe(true)
@@ -567,7 +568,8 @@ describe('createEnsembleReviewHarness', () => {
 
     expect(result.success).toBe(true)
     expect(result.harness).toBe('ensemble')
-    expect(result.output).toContain('Deep summary')
+    expect(result.output).toContain('No release- or development-blocking defects found.')
+    expect(result.output).not.toContain('Deep summary')
   })
 
   it('returns failure when synthesis fails without a valid deep fallback', async () => {

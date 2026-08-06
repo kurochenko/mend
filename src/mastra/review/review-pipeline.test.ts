@@ -205,6 +205,10 @@ describe('invokeReviewAgent', () => {
     expect(result.validatedReview.findings).toEqual([])
     expect(result.validatedReview.inlineComments).toEqual([])
     expect(result.validatedReview.assessment).toBe('approve')
+    expect(result.validatedReview.summary).toBe(
+      'No release- or development-blocking defects found.',
+    )
+    expect(result.validatedReview.summary).not.toContain('Optional improvements')
   })
 
   it('retries invalid final output once without tools', async () => {
