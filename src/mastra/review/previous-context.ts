@@ -306,18 +306,22 @@ interface PreviousContextItems {
   inlineComments: PreviousInlineComment[]
 }
 
-const isPersistedPseudoThreadResolution = (finding: ReviewFindingRecord): boolean =>
+const isPersistedGithubFindingResolution = (
+  finding: ReviewFindingRecord,
+  storedThreadStatus: Map<string, boolean>,
+): boolean =>
   finding.provider === 'github' &&
-  finding.providerThreadId.startsWith('note_') &&
+  storedThreadStatus.get(finding.providerThreadId) === false &&
   (finding.state === 'fixed' || finding.state === 'resolved')
 
-const applyPersistedPseudoThreadResolutions = (
+const applyPersistedGithubFindingResolutions = (
   findings: ReviewFindingRecord[],
   threadStatus: Map<string, boolean>,
+  storedThreadStatus: Map<string, boolean>,
 ): Map<string, boolean> => {
   const resolvedThreadStatus = new Map(threadStatus)
   for (const finding of findings) {
-    if (isPersistedPseudoThreadResolution(finding)) {
+    if (isPersistedGithubFindingResolution(finding, storedThreadStatus)) {
       resolvedThreadStatus.set(finding.providerThreadId, true)
     }
   }
@@ -476,7 +480,7 @@ export const buildPreviousReviewContext = async (params: {
     .filter((discussionId): discussionId is string => discussionId !== null)
   discussionIds.push(...trackedFindings.map((finding) => finding.providerThreadId))
 
-  let threadStatus = new Map(
+  const storedThreadStatus = new Map(
     storedThreads
       .filter(
         (thread) =>
@@ -485,6 +489,7 @@ export const buildPreviousReviewContext = async (params: {
       )
       .map((thread) => [thread.providerThreadId, thread.status === 'resolved'] as const),
   )
+  let threadStatus = storedThreadStatus
 
   if (discussionIds.length > 0) {
     try {
@@ -501,7 +506,11 @@ export const buildPreviousReviewContext = async (params: {
     }
   }
 
-  threadStatus = applyPersistedPseudoThreadResolutions(trackedFindings, threadStatus)
+  threadStatus = applyPersistedGithubFindingResolutions(
+    trackedFindings,
+    threadStatus,
+    storedThreadStatus,
+  )
 
   const current = buildCurrentContextItems(result, threadStatus)
   const historical = buildHistoricalContextItems(trackedFindings, threadStatus)

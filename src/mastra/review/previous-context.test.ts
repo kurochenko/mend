@@ -1119,4 +1119,154 @@ describe('buildPreviousReviewContext', () => {
       }),
     )
   })
+
+  test('keeps a fixed open GitHub review thread resolved when live resolution failed', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'fixed-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_open_thread',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'fixed-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Fixed review thread',
+              body: 'The fix was verified but provider resolution failed.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_open_thread',
+          threadKind: 'inline',
+          status: 'open',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_open_thread',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_open_message',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-fixed',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_open_thread',
+        resolved: true,
+      }),
+    )
+  })
+
+  test('keeps a reopened GitHub review thread unresolved after provider resolution', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'reopened-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_reopened_thread',
+          state: 'resolved',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'reopened-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Reopened review thread',
+              body: 'The provider thread was resolved and later reopened.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 22 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_reopened_thread',
+          threadKind: 'inline',
+          status: 'resolved',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_reopened_thread',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_reopened_message',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-reopened',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_reopened_thread',
+        resolved: false,
+      }),
+    )
+  })
 })

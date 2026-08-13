@@ -18,12 +18,10 @@ const defaultDependencies: ThreadResolutionDependencies = {
   persistReply: persistProviderReplyLocally,
 }
 
-const shouldPersistUnresolvableFindingResolution = (params: {
+const shouldPersistGithubFindingResolution = (params: {
   provider: ReviewProvider
-  threadId: string
   markResolved: boolean
-}): boolean =>
-  params.markResolved && params.provider.kind === 'github' && params.threadId.startsWith('note_')
+}): boolean => params.markResolved && params.provider.kind === 'github'
 
 export const executeThreadResolutions = async (params: {
   provider: ReviewProvider
@@ -62,7 +60,6 @@ export const executeThreadResolutions = async (params: {
         console.warn(
           `[post] failed to resolve thread ${resolution.discussionId} after replying: ${err}`,
         )
-        continue
       }
     }
 
@@ -75,9 +72,8 @@ export const executeThreadResolutions = async (params: {
         markResolved: providerResolved,
         markFindingResolved:
           providerResolved ||
-          shouldPersistUnresolvableFindingResolution({
+          shouldPersistGithubFindingResolution({
             provider: params.provider,
-            threadId: resolution.discussionId,
             markResolved: resolution.markResolved,
           }),
       })
