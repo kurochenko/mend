@@ -1135,6 +1135,7 @@ describe('buildPreviousReviewContext', () => {
           state: 'fixed',
           metadata: {
             kind: 'finding',
+            providerResolution: 'unresolvable',
             finding: {
               id: 'fixed-review-thread',
               category: 'correctness',
@@ -1191,6 +1192,81 @@ describe('buildPreviousReviewContext', () => {
       expect.objectContaining({
         identity: 'finding:PRRT_open_thread',
         resolved: true,
+      }),
+    )
+  })
+
+  test('keeps a fixed open GitHub review thread unresolved without failed-resolution provenance', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'fixed-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_fixer_thread',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            finding: {
+              id: 'fixer-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Fixer review thread',
+              body: 'The fixer changed local state while the provider thread stayed open.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 22 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_fixer_thread',
+          threadKind: 'inline',
+          status: 'open',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_fixer_thread',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_fixer_message',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-fixed',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_fixer_thread',
+        resolved: false,
       }),
     )
   })

@@ -306,22 +306,32 @@ interface PreviousContextItems {
   inlineComments: PreviousInlineComment[]
 }
 
-const isPersistedGithubFindingResolution = (
-  finding: ReviewFindingRecord,
-  storedThreadStatus: Map<string, boolean>,
-): boolean =>
-  finding.provider === 'github' &&
-  storedThreadStatus.get(finding.providerThreadId) === false &&
-  (finding.state === 'fixed' || finding.state === 'resolved')
+const isPersistedGithubFindingResolution = (finding: ReviewFindingRecord): boolean => {
+  if (
+    finding.provider !== 'github' ||
+    (finding.state !== 'fixed' && finding.state !== 'resolved')
+  ) {
+    return false
+  }
+
+  if (finding.providerThreadId.startsWith('note_')) {
+    return true
+  }
+
+  if (!finding.metadata || typeof finding.metadata !== 'object') {
+    return false
+  }
+
+  return (finding.metadata as Record<string, unknown>).providerResolution === 'unresolvable'
+}
 
 const applyPersistedGithubFindingResolutions = (
   findings: ReviewFindingRecord[],
   threadStatus: Map<string, boolean>,
-  storedThreadStatus: Map<string, boolean>,
 ): Map<string, boolean> => {
   const resolvedThreadStatus = new Map(threadStatus)
   for (const finding of findings) {
-    if (isPersistedGithubFindingResolution(finding, storedThreadStatus)) {
+    if (isPersistedGithubFindingResolution(finding)) {
       resolvedThreadStatus.set(finding.providerThreadId, true)
     }
   }
@@ -506,11 +516,7 @@ export const buildPreviousReviewContext = async (params: {
     }
   }
 
-  threadStatus = applyPersistedGithubFindingResolutions(
-    trackedFindings,
-    threadStatus,
-    storedThreadStatus,
-  )
+  threadStatus = applyPersistedGithubFindingResolutions(trackedFindings, threadStatus)
 
   const current = buildCurrentContextItems(result, threadStatus)
   const historical = buildHistoricalContextItems(trackedFindings, threadStatus)

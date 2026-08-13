@@ -93,6 +93,7 @@ if (!testDatabaseUrl) {
         threadId: thread.id,
         provider: 'gitlab',
         providerThreadId: 'discussion-2',
+        metadata: { kind: 'finding', finding: { id: 'finding-2' } },
       })
 
       const updated = await updateReviewFindingState({
@@ -101,12 +102,17 @@ if (!testDatabaseUrl) {
         decisionReason: 'valid finding',
         decidedByExternalId: '7',
         decidedByName: 'Reviewer',
+        metadata: { kind: 'finding', finding: { id: 'finding-2', updated: true } },
       })
       const counts = await countReviewFindingsByStateForMr({ projectKey, mrIid })
 
       expect(updated?.state).toBe('accepted')
       expect(updated?.decisionReason).toBe('valid finding')
       expect(updated?.decidedAt).toBeInstanceOf(Date)
+      expect(updated?.metadata).toEqual({
+        kind: 'finding',
+        finding: { id: 'finding-2', updated: true },
+      })
       expect(counts).toEqual({ accepted: 1 })
     })
 

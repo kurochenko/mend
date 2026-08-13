@@ -56,6 +56,24 @@ export const buildResolvedFindingStateUpdate = (
   decidedByName: reply.author.username,
 })
 
+const buildGithubResolutionMetadata = (params: {
+  metadata: unknown
+  markResolved: boolean
+}): Record<string, unknown> => {
+  const metadata =
+    params.metadata && typeof params.metadata === 'object'
+      ? { ...(params.metadata as Record<string, unknown>) }
+      : {}
+
+  if (params.markResolved) {
+    delete metadata.providerResolution
+  } else {
+    metadata.providerResolution = 'unresolvable'
+  }
+
+  return metadata
+}
+
 export const upsertProviderThread = async (params: {
   project: ProjectConfig
   projectKey: string
@@ -179,6 +197,14 @@ export const persistProviderReplyLocally = async (params: {
   await dependencies.updateReviewFindingState({
     id: finding.id,
     ...buildResolvedFindingStateUpdate(params.reply),
+    ...(params.provider === 'github'
+      ? {
+          metadata: buildGithubResolutionMetadata({
+            metadata: finding.metadata,
+            markResolved: params.markResolved,
+          }),
+        }
+      : {}),
   })
 }
 
