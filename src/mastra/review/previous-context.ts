@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import type { ProjectConfig } from '@/config'
-import { listReviewFindingsForMr, type ReviewFindingRecord } from '@/db/review-findings'
+import {
+  listReviewFindingsForMr,
+  type ReviewFindingRecord,
+  updateReviewFindingState,
+} from '@/db/review-findings'
 import {
   archiveActiveThreadResolvedMemoryForThread,
   createReviewMemoryEntry,
@@ -273,15 +277,22 @@ const refreshThreadStatus = async (params: {
   mrIid: number
   discussionIds: string[]
   storedThreadStatus: Map<string, boolean>
-}): Promise<Map<string, boolean>> => {
+}): Promise<{
+  threadStatus: Map<string, boolean>
+  liveResolvedDiscussionIds: Set<string>
+}> => {
   if (params.discussionIds.length === 0) {
-    return params.storedThreadStatus
+    return {
+      threadStatus: params.storedThreadStatus,
+      liveResolvedDiscussionIds: new Set(),
+    }
   }
 
   const provider = createReviewProvider(params.project)
   const threads = await provider.listThreads(params.mrIid)
   const discussionIds = new Set(params.discussionIds)
   const refreshedThreadStatus = new Map(params.storedThreadStatus)
+  const liveResolvedDiscussionIds = new Set<string>()
 
   for (const thread of threads) {
     if (!discussionIds.has(thread.id)) {
@@ -290,6 +301,9 @@ const refreshThreadStatus = async (params: {
 
     const resolved = isThreadResolved(thread)
     refreshedThreadStatus.set(thread.id, resolved)
+    if (resolved) {
+      liveResolvedDiscussionIds.add(thread.id)
+    }
 
     await updateReviewThreadStatusByProviderThreadId({
       provider: params.project.platform,
@@ -298,7 +312,10 @@ const refreshThreadStatus = async (params: {
     })
   }
 
-  return refreshedThreadStatus
+  return {
+    threadStatus: refreshedThreadStatus,
+    liveResolvedDiscussionIds,
+  }
 }
 
 interface PreviousContextItems {
@@ -336,6 +353,47 @@ const applyPersistedGithubFindingResolutions = (
     }
   }
   return resolvedThreadStatus
+}
+
+const retireObservedGithubUnresolvableProvenance = async (
+  findings: ReviewFindingRecord[],
+  liveResolvedDiscussionIds: Set<string>,
+): Promise<ReviewFindingRecord[]> => {
+  return await Promise.all(
+    findings.map(async (finding) => {
+      if (
+        finding.provider !== 'github' ||
+        finding.providerThreadId.startsWith('note_') ||
+        !liveResolvedDiscussionIds.has(finding.providerThreadId) ||
+        !finding.metadata ||
+        typeof finding.metadata !== 'object' ||
+        Array.isArray(finding.metadata) ||
+        (finding.metadata as Record<string, unknown>).providerResolution !== 'unresolvable'
+      ) {
+        return finding
+      }
+
+      const metadata = { ...(finding.metadata as Record<string, unknown>) }
+      delete metadata.providerResolution
+      try {
+        await updateReviewFindingState({
+          id: finding.id,
+          state: finding.state,
+          decisionReason: finding.decisionReason,
+          decidedByExternalId: finding.decidedByExternalId,
+          decidedByName: finding.decidedByName,
+          decidedAt: finding.decidedAt,
+          metadata,
+        })
+      } catch (error) {
+        console.warn(
+          `[previous-context] failed to retire GitHub unresolvable provenance for finding ${finding.id}: ${error}`,
+        )
+      }
+
+      return { ...finding, metadata }
+    }),
+  )
 }
 
 const buildCurrentContextItems = (
@@ -476,7 +534,7 @@ export const buildPreviousReviewContext = async (params: {
   }
 
   const result = parsed.data
-  const [storedThreads, trackedFindings] = await Promise.all([
+  const [storedThreads, storedFindings] = await Promise.all([
     listReviewThreadsForMr({ projectKey: params.project.key, mrIid: params.mrIid }),
     listReviewFindingsForMr({ projectKey: params.project.key, mrIid: params.mrIid }),
   ])
@@ -488,7 +546,7 @@ export const buildPreviousReviewContext = async (params: {
   ]
     .map((comment) => comment.providerThreadId)
     .filter((discussionId): discussionId is string => discussionId !== null)
-  discussionIds.push(...trackedFindings.map((finding) => finding.providerThreadId))
+  discussionIds.push(...storedFindings.map((finding) => finding.providerThreadId))
 
   const storedThreadStatus = new Map(
     storedThreads
@@ -500,15 +558,18 @@ export const buildPreviousReviewContext = async (params: {
       .map((thread) => [thread.providerThreadId, thread.status === 'resolved'] as const),
   )
   let threadStatus = storedThreadStatus
+  let liveResolvedDiscussionIds = new Set<string>()
 
   if (discussionIds.length > 0) {
     try {
-      threadStatus = await refreshThreadStatus({
+      const refreshed = await refreshThreadStatus({
         project: params.project,
         mrIid: params.mrIid,
         discussionIds,
         storedThreadStatus: threadStatus,
       })
+      threadStatus = refreshed.threadStatus
+      liveResolvedDiscussionIds = refreshed.liveResolvedDiscussionIds
     } catch (error) {
       console.warn(
         `[previous-context] failed to refresh thread status for run ${params.previousRunId}: ${error}`,
@@ -516,6 +577,10 @@ export const buildPreviousReviewContext = async (params: {
     }
   }
 
+  const trackedFindings = await retireObservedGithubUnresolvableProvenance(
+    storedFindings,
+    liveResolvedDiscussionIds,
+  )
   threadStatus = applyPersistedGithubFindingResolutions(trackedFindings, threadStatus)
 
   const current = buildCurrentContextItems(result, threadStatus)

@@ -10,6 +10,9 @@ const mockListReviewThreadsForMr = mock<(...args: unknown[]) => Promise<unknown[
 const mockListReviewFindingsForMr = mock<(...args: unknown[]) => Promise<unknown[]>>(() =>
   Promise.resolve([]),
 )
+const mockUpdateReviewFindingState = mock<(...args: unknown[]) => Promise<unknown>>(() =>
+  Promise.resolve(null),
+)
 const mockUpdateReviewThreadStatusByProviderThreadId = mock(() => Promise.resolve())
 const mockGetReviewMessageByProviderMessageId = mock<(...args: unknown[]) => Promise<unknown>>(() =>
   Promise.resolve(null),
@@ -32,7 +35,7 @@ mock.module('@/db/review-findings', () => ({
   upsertReviewFinding: mock(() => Promise.resolve(null)),
   getReviewFindingByProviderThreadId: mock(() => Promise.resolve(null)),
   getReviewFindingByThreadId: mock(() => Promise.resolve(null)),
-  updateReviewFindingState: mock(() => Promise.resolve(null)),
+  updateReviewFindingState: mockUpdateReviewFindingState,
   countReviewFindingsByStateForMr: mock(() => Promise.resolve({})),
   countReviewFindingSeveritiesForMr: mock(() =>
     Promise.resolve({ bug: 0, security: 0, performance: 0, suggestion: 0 }),
@@ -226,6 +229,7 @@ describe('buildPreviousReviewContext', () => {
     mockListReviewThreadsForRun.mockReset()
     mockListReviewThreadsForMr.mockReset()
     mockListReviewFindingsForMr.mockReset()
+    mockUpdateReviewFindingState.mockReset()
     mockUpdateReviewThreadStatusByProviderThreadId.mockReset()
     mockGetReviewMessageByProviderMessageId.mockReset()
     mockUpsertReviewMessage.mockReset()
@@ -236,6 +240,7 @@ describe('buildPreviousReviewContext', () => {
     mockListReviewThreadsForRun.mockImplementation(() => Promise.resolve([]))
     mockListReviewThreadsForMr.mockImplementation(() => Promise.resolve([]))
     mockListReviewFindingsForMr.mockImplementation(() => Promise.resolve([]))
+    mockUpdateReviewFindingState.mockImplementation(() => Promise.resolve(null))
     mockUpdateReviewThreadStatusByProviderThreadId.mockImplementation(() => Promise.resolve())
     mockGetReviewMessageByProviderMessageId.mockImplementation(() => Promise.resolve(null))
     mockUpsertReviewMessage.mockImplementation(() => Promise.resolve({ id: 'message-human-reply' }))
@@ -1196,6 +1201,93 @@ describe('buildPreviousReviewContext', () => {
     )
   })
 
+  test('retires failed-resolution provenance after observing a resolved GitHub review thread', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'resolved-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'finding-resolved-live',
+          provider: 'github',
+          providerThreadId: 'PRRT_resolved_thread',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            providerResolution: 'unresolvable',
+            finding: {
+              id: 'resolved-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Resolved review thread',
+              body: 'GitHub later showed this thread as resolved.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_resolved_thread',
+          threadKind: 'inline',
+          status: 'open',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_resolved_thread',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_resolved_message',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: true,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-resolved',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_resolved_thread',
+        resolved: true,
+      }),
+    )
+    expect(mockUpdateReviewFindingState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'finding-resolved-live',
+        state: 'fixed',
+        metadata: {
+          kind: 'finding',
+          finding: expect.objectContaining({ id: 'resolved-review-thread' }),
+        },
+      }),
+    )
+  })
+
   test('keeps a fixed open GitHub review thread unresolved without failed-resolution provenance', async () => {
     mockGetReviewRun.mockImplementation(() =>
       Promise.resolve({
@@ -1271,7 +1363,7 @@ describe('buildPreviousReviewContext', () => {
     )
   })
 
-  test('keeps a reopened GitHub review thread unresolved after provider resolution', async () => {
+  test('gates a resolve-then-reopen GitHub review thread after provenance is retired', async () => {
     mockGetReviewRun.mockImplementation(() =>
       Promise.resolve({
         commitSha: 'reopened-sha',
