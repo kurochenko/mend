@@ -26,7 +26,14 @@ describe('persistProviderReplyLocally', () => {
       createdAt: new Date('2026-08-06T12:00:00Z'),
       updatedAt: new Date('2026-08-06T12:00:00Z'),
     } satisfies ReviewThreadRecord
-    const reconstructedFinding = { id: 'reconstructed-finding' } as ReviewFindingRecord
+    const reconstructedFinding = {
+      id: 'reconstructed-finding',
+      metadata: {
+        kind: 'finding',
+        finding: { id: 'legacy-blocker' },
+        inlineComment: { body: 'preserved' },
+      },
+    } as ReviewFindingRecord
     const upsertReviewFinding = mock(async () => reconstructedFinding)
     const updateReviewFindingState = mock(async () => reconstructedFinding)
 
@@ -67,6 +74,61 @@ describe('persistProviderReplyLocally', () => {
       decisionReason: 'Verified as fixed in `fixed-sha`.',
       decidedByExternalId: '1',
       decidedByName: 'mend-bot',
+      metadata: {
+        kind: 'finding',
+        finding: { id: 'legacy-blocker' },
+        inlineComment: { body: 'preserved' },
+        providerResolution: 'unresolvable',
+      },
+    })
+  })
+
+  it('clears failed GitHub resolution provenance after provider resolution succeeds', async () => {
+    const finding = {
+      id: 'finding-1',
+      metadata: {
+        kind: 'finding',
+        finding: { id: 'blocker-1' },
+        providerResolution: 'unresolvable',
+      },
+    } as ReviewFindingRecord
+    const updateReviewFindingState = mock(async () => finding)
+
+    await persistProviderReplyLocally({
+      provider: 'github',
+      threadId: 'PRRT_thread_1',
+      reviewRunId: 'fixed-run',
+      reply: {
+        id: 'reply-1',
+        body: 'Verified as fixed.',
+        author: { id: 1, username: 'mend-bot', raw: {} },
+        resolvable: true,
+        position: null,
+        raw: {},
+      },
+      markResolved: true,
+      markFindingResolved: true,
+      dependencies: {
+        getReviewThreadByProviderThreadId: mock(
+          async () => ({ id: 'thread-row', provider: 'github' }) as ReviewThreadRecord,
+        ),
+        upsertReviewMessage: mock(async () => null as never),
+        updateReviewThreadStatusByProviderThreadId: mock(async () => null as never),
+        getReviewFindingByProviderThreadId: mock(async () => finding),
+        updateReviewFindingState,
+      },
+    })
+
+    expect(updateReviewFindingState).toHaveBeenCalledWith({
+      id: 'finding-1',
+      state: 'resolved',
+      decisionReason: 'Verified as fixed.',
+      decidedByExternalId: '1',
+      decidedByName: 'mend-bot',
+      metadata: {
+        kind: 'finding',
+        finding: { id: 'blocker-1' },
+      },
     })
   })
 })

@@ -121,4 +121,43 @@ describe('executeThreadResolutions', () => {
       unmatchedVerdictCount: 0,
     })
   })
+
+  it('persists a fixed GitHub review thread when provider resolution throws', async () => {
+    const provider = makeProvider()
+    provider.kind = 'github'
+    provider.resolveThread = mock(async () => {
+      throw new Error('FORBIDDEN')
+    })
+    const persistReply = mock(async () => {})
+
+    const stats = await executeThreadResolutions({
+      provider,
+      mrIid: 7,
+      reviewRunId: 'run-2',
+      unmatchedVerdictCount: 0,
+      resolutions: [
+        {
+          previousFindingId: 'finding-1',
+          discussionId: 'PRRT_review_thread_1',
+          status: 'fixed',
+          replyBody: 'Verified as fixed',
+          markResolved: true,
+        },
+      ],
+      dependencies: { persistReply },
+    })
+
+    expect(persistReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: 'PRRT_review_thread_1',
+        markResolved: false,
+        markFindingResolved: true,
+      }),
+    )
+    expect(stats).toEqual({
+      resolvedThreadCount: 0,
+      partiallyFixedThreadCount: 1,
+      unmatchedVerdictCount: 0,
+    })
+  })
 })

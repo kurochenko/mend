@@ -28,6 +28,7 @@ interface UpdateReviewFindingStateParams {
   decidedByExternalId?: string | null
   decidedByName?: string | null
   decidedAt?: Date | null
+  metadata?: unknown
 }
 
 export const upsertReviewFinding = async (
@@ -125,6 +126,7 @@ export const updateReviewFindingState = async (
   params: UpdateReviewFindingStateParams,
 ): Promise<ReviewFindingRecord | null> => {
   const db = getDb()
+  const metadataUpdate = Object.hasOwn(params, 'metadata') ? { metadata: params.metadata } : {}
   const [row] = await db
     .update(reviewFindings)
     .set({
@@ -133,6 +135,7 @@ export const updateReviewFindingState = async (
       decidedByExternalId: params.decidedByExternalId ?? null,
       decidedByName: params.decidedByName ?? null,
       decidedAt: params.decidedAt ?? new Date(),
+      ...metadataUpdate,
       updatedAt: new Date(),
     })
     .where(eq(reviewFindings.id, params.id))
