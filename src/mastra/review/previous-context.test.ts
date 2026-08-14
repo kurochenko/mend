@@ -1202,6 +1202,9 @@ describe('buildPreviousReviewContext', () => {
   })
 
   test('retires failed-resolution provenance after observing a resolved GitHub review thread', async () => {
+    mockUpdateReviewFindingState.mockImplementation(() =>
+      Promise.resolve({ id: 'finding-resolved-live' }),
+    )
     mockGetReviewRun.mockImplementation(() =>
       Promise.resolve({
         commitSha: 'resolved-sha',
@@ -1286,6 +1289,165 @@ describe('buildPreviousReviewContext', () => {
         },
       }),
     )
+  })
+
+  test('keeps failed-resolution provenance when retirement rejects after live resolution', async () => {
+    mockUpdateReviewFindingState.mockImplementation(() =>
+      Promise.reject(new Error('finding metadata write failed')),
+    )
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'resolved-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'finding-retirement-rejected',
+          provider: 'github',
+          providerThreadId: 'PRRT_retirement_rejected',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            providerResolution: 'unresolvable',
+            finding: {
+              id: 'retirement-rejected-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Retirement write failed',
+              body: 'GitHub resolved the thread but the metadata update failed.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_retirement_rejected',
+          threadKind: 'inline',
+          status: 'open',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_retirement_rejected',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_retirement_rejected',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: true,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-retirement-rejected',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_retirement_rejected',
+        resolved: true,
+      }),
+    )
+    expect(mockUpdateReviewFindingState).toHaveBeenCalledTimes(1)
+  })
+
+  test('gates a reopened GitHub review thread after provenance retirement fails', async () => {
+    mockGetReviewRun.mockImplementation(() =>
+      Promise.resolve({
+        commitSha: 'reopened-sha',
+        result: makePostResult({ reviewMode: 'update' }),
+      }),
+    )
+    mockListReviewFindingsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'finding-retirement-failed-before-reopen',
+          provider: 'github',
+          providerThreadId: 'PRRT_reopened_after_failure',
+          state: 'fixed',
+          metadata: {
+            kind: 'finding',
+            providerResolution: 'unresolvable',
+            finding: {
+              id: 'reopened-after-failure-review-thread',
+              category: 'correctness',
+              severity: 'bug',
+              actionability: 'required',
+              scope: 'single_file',
+              title: 'Reopened after failed retirement',
+              body: 'The stale metadata must not override the reopened provider thread.',
+              files: ['src/github.ts'],
+              evidence: [{ type: 'file_line', file: 'src/github.ts', line: 21 }],
+            },
+          },
+        },
+      ]),
+    )
+    mockListReviewThreadsForMr.mockImplementation(() =>
+      Promise.resolve([
+        {
+          provider: 'github',
+          providerThreadId: 'PRRT_reopened_after_failure',
+          threadKind: 'inline',
+          status: 'resolved',
+        },
+      ]),
+    )
+    mockListThreads.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: 'PRRT_reopened_after_failure',
+          isThread: true,
+          messages: [
+            {
+              id: 'PRRC_reopened_after_failure',
+              body: 'GitHub review comment',
+              author: { id: 1, username: 'mend-bot', raw: {} },
+              resolvable: true,
+              resolved: false,
+              position: null,
+              raw: {},
+            },
+          ],
+          raw: {},
+        },
+      ]),
+    )
+
+    const context = await buildPreviousReviewContext({
+      project: { key: 'demo', platform: 'github', repo: 'org/repo' } as never,
+      mrIid: 1570,
+      previousRunId: 'run-reopened-after-failure',
+    })
+
+    expect(context?.findings).toContainEqual(
+      expect.objectContaining({
+        identity: 'finding:PRRT_reopened_after_failure',
+        resolved: false,
+      }),
+    )
+    expect(mockUpdateReviewFindingState).not.toHaveBeenCalled()
   })
 
   test('keeps a fixed open GitHub review thread unresolved without failed-resolution provenance', async () => {

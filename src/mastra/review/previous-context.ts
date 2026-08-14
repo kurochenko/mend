@@ -345,12 +345,22 @@ const isPersistedGithubFindingResolution = (finding: ReviewFindingRecord): boole
 const applyPersistedGithubFindingResolutions = (
   findings: ReviewFindingRecord[],
   threadStatus: Map<string, boolean>,
+  storedThreadStatus: Map<string, boolean>,
 ): Map<string, boolean> => {
   const resolvedThreadStatus = new Map(threadStatus)
   for (const finding of findings) {
-    if (isPersistedGithubFindingResolution(finding)) {
-      resolvedThreadStatus.set(finding.providerThreadId, true)
+    if (!isPersistedGithubFindingResolution(finding)) {
+      continue
     }
+
+    if (
+      !finding.providerThreadId.startsWith('note_') &&
+      storedThreadStatus.get(finding.providerThreadId) === true
+    ) {
+      continue
+    }
+
+    resolvedThreadStatus.set(finding.providerThreadId, true)
   }
   return resolvedThreadStatus
 }
@@ -376,7 +386,7 @@ const retireObservedGithubUnresolvableProvenance = async (
       const metadata = { ...(finding.metadata as Record<string, unknown>) }
       delete metadata.providerResolution
       try {
-        await updateReviewFindingState({
+        const updatedFinding = await updateReviewFindingState({
           id: finding.id,
           state: finding.state,
           decisionReason: finding.decisionReason,
@@ -385,10 +395,17 @@ const retireObservedGithubUnresolvableProvenance = async (
           decidedAt: finding.decidedAt,
           metadata,
         })
+        if (!updatedFinding) {
+          console.warn(
+            `[previous-context] failed to retire GitHub unresolvable provenance for finding ${finding.id}: update returned null`,
+          )
+          return finding
+        }
       } catch (error) {
         console.warn(
           `[previous-context] failed to retire GitHub unresolvable provenance for finding ${finding.id}: ${error}`,
         )
+        return finding
       }
 
       return { ...finding, metadata }
@@ -581,7 +598,11 @@ export const buildPreviousReviewContext = async (params: {
     storedFindings,
     liveResolvedDiscussionIds,
   )
-  threadStatus = applyPersistedGithubFindingResolutions(trackedFindings, threadStatus)
+  threadStatus = applyPersistedGithubFindingResolutions(
+    trackedFindings,
+    threadStatus,
+    storedThreadStatus,
+  )
 
   const current = buildCurrentContextItems(result, threadStatus)
   const historical = buildHistoricalContextItems(trackedFindings, threadStatus)
