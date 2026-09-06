@@ -1,9 +1,11 @@
 import { createStep } from '@mastra/core/workflows'
-import { getProject } from '@/config'
+import { getProject, type ProjectConfig } from '@/config'
 import { countPostedSuccessfulReviewRuns } from '@/db/review-runs'
 import { createReviewProvider } from '@/integrations/provider/client'
+import type { DiffRefs } from '@/integrations/provider/types'
+import { ensureCommitAvailable, getWorktreeHeadSha } from '@/integrations/repo'
+import { type DiffMap, parseDiff } from '@/lib/diff'
 import { assertSafeGitRef, execGit } from '@/lib/exec'
-import { parseDiff } from '@/lib/diff'
 import {
   buildPreviousReviewContext,
   loadPublishedReviewThreadsForMr,
@@ -22,6 +24,43 @@ const emptyResolutionStats = (): ResolutionStats => ({
   partiallyFixedThreadCount: 0,
   unmatchedVerdictCount: 0,
 })
+
+export const assertReviewedHeadIsCurrent = (params: {
+  reviewedHeadSha: string
+  worktreeHeadSha: string
+  providerHeadSha: string
+}): void => {
+  if (params.worktreeHeadSha !== params.reviewedHeadSha) {
+    throw new Error(
+      `Reviewed worktree head ${params.worktreeHeadSha} does not match reviewed SHA ${params.reviewedHeadSha}`,
+    )
+  }
+
+  if (params.providerHeadSha !== params.reviewedHeadSha) {
+    throw new Error(
+      `Provider head ${params.providerHeadSha} changed after review; reviewed SHA was ${params.reviewedHeadSha}`,
+    )
+  }
+}
+
+export const preparePostDiffMap = async (params: {
+  project: ProjectConfig
+  worktreePath: string
+  reviewedHeadSha: string
+  diffRefs: DiffRefs
+}): Promise<DiffMap> => {
+  const worktreeHeadSha = await getWorktreeHeadSha(params.worktreePath)
+  assertReviewedHeadIsCurrent({
+    reviewedHeadSha: params.reviewedHeadSha,
+    worktreeHeadSha,
+    providerHeadSha: params.diffRefs.headSha,
+  })
+
+  const mrDiffBase = assertSafeGitRef(params.diffRefs.baseSha, 'MR diff base ref')
+  await ensureCommitAvailable(params.project, mrDiffBase)
+  const diffOutput = await execGit(['diff', `${mrDiffBase}...HEAD`], params.worktreePath)
+  return parseDiff(diffOutput)
+}
 
 export const postStep = createStep({
   id: 'post',
@@ -46,9 +85,12 @@ export const postStep = createStep({
       }),
     ])
 
-    const mrDiffBase = assertSafeGitRef(diffRefs.baseSha, 'MR diff base ref')
-    const diffOutput = await execGit(['diff', `${mrDiffBase}...HEAD`], inputData.worktreePath)
-    const diffMap = parseDiff(diffOutput)
+    const diffMap = await preparePostDiffMap({
+      project,
+      worktreePath: inputData.worktreePath,
+      reviewedHeadSha: inputData.commitSha,
+      diffRefs,
+    })
     const previousRunId = inputData.previousRunId
     const shouldResolveThreads =
       inputData.reviewMode === 'update' &&

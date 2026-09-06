@@ -6,11 +6,11 @@ import {
   finishRunningReview,
   getReviewQueueRecord,
   listReviewQueueRecords,
+  type ReviewQueueRecord,
   recoverReviewQueueAfterRestart,
   setPendingCommitSha,
   setRunningCommitSha,
   upsertPendingReviewRequest,
-  type ReviewQueueRecord,
 } from '@/db/review-queue'
 import { updateReviewRunResult } from '@/db/review-runs'
 import { getServiceRuntimeMode } from '@/db/service-runtime'
@@ -18,12 +18,16 @@ import { createReviewProvider, type ReviewProvider } from '@/integrations/provid
 import { toErrorMessage } from '@/lib/errors'
 import { asMrReviewRequestEvent, type MrReviewRequestEvent } from '@/lib/review-events'
 import {
+  type AutomaticFixBatchOutcome,
   automaticLoopLimitBody,
   queueAutomaticFixBatch,
-  type AutomaticFixBatchOutcome,
 } from '@/mastra/fix/automatic-batch'
-import { executeMrReview } from '@/mastra/run-mr-review'
 import type { PostStepOutput } from '@/mastra/review/run-result'
+import {
+  executeMrReview,
+  formatPublicReviewFailure,
+  ReviewExecutionError,
+} from '@/mastra/run-mr-review'
 import { mrIidFromLockKey, mrLockKey, withMrLock } from '@/server/mr-locks'
 import { getLatestSuccessfulRun, hasSuccessfulRunForSha } from '@/server/review-context'
 import { syncStatusNote } from '@/server/status-note-sync'
@@ -335,7 +339,9 @@ const runQueuedJob = async (params: {
         reviewMode,
         previousReviewedSha,
         runId: execution.reviewRunId,
-        message: `Workflow status: ${execution.workflowResult.status}`,
+        message: execution.failure
+          ? formatPublicReviewFailure(execution.failure)
+          : 'Review failed during workflow (workflow)',
       },
       dependencies: { provider },
     })
@@ -344,6 +350,8 @@ const runQueuedJob = async (params: {
     )
   } catch (error) {
     const message = toErrorMessage(error)
+    const failure = error instanceof ReviewExecutionError ? error.failure : null
+    const reviewRunId = error instanceof ReviewExecutionError ? error.reviewRunId : undefined
 
     if (isMissingRemoteRefFailure(message)) {
       await dependencies.syncStatusNote({
@@ -370,7 +378,10 @@ const runQueuedJob = async (params: {
         runningSha: statusRunningSha,
         reviewMode: statusReviewMode,
         previousReviewedSha: statusPreviousReviewedSha,
-        message,
+        runId: reviewRunId,
+        message: failure
+          ? formatPublicReviewFailure(failure)
+          : 'Review failed during workflow (workflow)',
       },
       dependencies: { provider },
     })

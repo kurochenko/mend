@@ -4,7 +4,10 @@ import type { AppConfig, ProjectConfig } from '@/config'
 import type { ReviewQueueJob, ReviewQueueRecord } from '@/db/review-queue'
 import type { ReviewProvider } from '@/integrations/provider/client'
 import type { MrReviewRequestEvent } from '@/lib/review-events'
-import type { executeMrReview as executeMrReviewFunction } from '@/mastra/run-mr-review'
+import {
+  type executeMrReview as executeMrReviewFunction,
+  ReviewExecutionError,
+} from '@/mastra/run-mr-review'
 import type { syncStatusNote } from '@/server/status-note-sync'
 
 const mockUpsertPendingReviewRequest =
@@ -556,7 +559,15 @@ describe('enqueueMrReview', () => {
         }),
       )
       .mockImplementation(() => Promise.resolve(null))
-    mockExecuteMrReview.mockImplementation(() => Promise.reject(new Error('boom')))
+    mockExecuteMrReview.mockImplementation(() =>
+      Promise.reject(
+        new ReviewExecutionError('run-42', {
+          phase: 'post',
+          category: 'git',
+          message: 'git diff internal failure',
+        }),
+      ),
+    )
 
     await enqueueReview({
       mastra: makeMastra(),
@@ -570,7 +581,10 @@ describe('enqueueMrReview', () => {
     expect(
       statusInputs().some(
         (input) =>
-          input.state === 'failed' && input.runningSha === 'abc123' && input.message === 'boom',
+          input.state === 'failed' &&
+          input.runningSha === 'abc123' &&
+          input.runId === 'run-42' &&
+          input.message === 'Review publication failed during post (git)',
       ),
     ).toBe(true)
   })
