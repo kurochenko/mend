@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import type { ProjectConfig } from '@/config'
 import { withProjectRepoLock } from '@/integrations/repo-locks'
 import { toErrorMessage } from '@/lib/errors'
@@ -96,6 +95,21 @@ const fetchCommitSha = async (project: ProjectConfig, commitSha: string): Promis
     throw new Error(
       `Unable to fetch requested commit SHA ${safeCommitSha} from origin: ${toErrorMessage(error)}`,
     )
+  }
+}
+
+export const ensureCommitAvailable = async (
+  project: ProjectConfig,
+  commitSha: string,
+): Promise<void> => {
+  const safeCommitSha = assertCommitSha(commitSha)
+  if (await hasCommit(project.clone_path, safeCommitSha)) {
+    return
+  }
+
+  await fetchCommitSha(project, safeCommitSha)
+  if (!(await hasCommit(project.clone_path, safeCommitSha))) {
+    throw new Error(`Requested commit SHA ${safeCommitSha} is unavailable after fetch`)
   }
 }
 

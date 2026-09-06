@@ -1,11 +1,12 @@
+import { afterEach, describe, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, test } from 'bun:test'
 import type { ProjectConfig } from '@/config'
 import {
   commitAndPushWorktree,
+  ensureCommitAvailable,
   shouldFetchRequestedCommitAfterBranchFetch,
 } from '@/integrations/repo'
 import { sanitizeGitEnv } from '@/lib/exec'
@@ -178,5 +179,68 @@ describe('shouldFetchRequestedCommitAfterBranchFetch', () => {
     expect(shouldFetchRequestedCommitAfterBranchFetch(undefined, false)).toBe(false)
     expect(shouldFetchRequestedCommitAfterBranchFetch('a'.repeat(40), true)).toBe(false)
     expect(shouldFetchRequestedCommitAfterBranchFetch('a'.repeat(40), false)).toBe(true)
+  })
+})
+
+describe('ensureCommitAvailable', () => {
+  let tmp: string | null = null
+
+  const setupWorktree = (): { origin: string; worktree: string } => {
+    tmp = mkdtempSync(join(tmpdir(), 'mend-repo-test-'))
+    const origin = join(tmp, 'origin.git')
+    const worktree = join(tmp, 'worktree')
+
+    git(tmp, ['init', '--initial-branch=main', '--bare', origin])
+    git(tmp, ['clone', origin, worktree])
+    git(worktree, ['checkout', '-b', 'feature/fix'])
+    writeFileSync(join(worktree, 'README.md'), 'initial\n')
+    git(worktree, ['add', 'README.md'])
+    gitCommit(worktree, 'initial')
+    git(worktree, ['push', 'origin', 'feature/fix'])
+
+    return { origin, worktree }
+  }
+
+  afterEach(() => {
+    if (tmp) {
+      rmSync(tmp, { recursive: true, force: true })
+      tmp = null
+    }
+  })
+
+  test('fetches an exact missing base commit into the authenticated clone', async () => {
+    const { origin } = setupWorktree()
+    const testRoot = tmp
+    if (!testRoot) {
+      throw new Error('Test repository root was not initialized')
+    }
+    const project = makeProject(origin)
+    git(testRoot, ['clone', '--bare', origin, project.clone_path])
+    const extraClone = join(testRoot, 'extra-clone')
+    git(testRoot, ['clone', '--branch', 'feature/fix', origin, extraClone])
+    writeFileSync(join(extraClone, 'base.txt'), 'base\n')
+    git(extraClone, ['add', 'base.txt'])
+    gitCommit(extraClone, 'base commit')
+    const baseSha = git(extraClone, ['rev-parse', 'HEAD'])
+    git(extraClone, ['push', 'origin', 'feature/fix'])
+
+    await ensureCommitAvailable(project, baseSha)
+
+    expect(git(project.clone_path, ['cat-file', '-e', `${baseSha}^{commit}`])).toBe('')
+  })
+
+  test('fails closed when the exact base commit cannot be fetched', async () => {
+    const { origin } = setupWorktree()
+    const testRoot = tmp
+    if (!testRoot) {
+      throw new Error('Test repository root was not initialized')
+    }
+    const project = makeProject(origin)
+    git(testRoot, ['clone', '--bare', origin, project.clone_path])
+    git(project.clone_path, ['remote', 'set-url', 'origin', join(testRoot, 'missing-origin.git')])
+
+    await expect(ensureCommitAvailable(project, 'a'.repeat(40))).rejects.toThrow(
+      'Unable to fetch requested commit SHA',
+    )
   })
 })

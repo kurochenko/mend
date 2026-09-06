@@ -13,4 +13,6 @@ Mend sends a change-request number plus operation-specific inputs (note bodies, 
 
 Failure modes: API errors surface as typed errors carrying HTTP status and method; the publish operation must refuse to proceed when pre-existing drafts not belonging to the current run are found (GitLab draft notes, GitHub pending review comments). Adapters own all provider wire details — draft-note choreography and bulk publish on GitLab, single pending-review-safe review submission plus issue-comment summary on GitHub, thread resolution via GraphQL on GitHub. GitHub review-thread positions come from `PullRequestReviewThread`; general GitHub PR comments are non-resolvable pseudo-threads, so resolution returns false and local thread state remains unresolved even when the separate persisted finding state records a fixed verdict.
 
+Failed review runs may update a provider status note through this boundary with a safe phase and category. Internal workflow and provider error messages remain persisted for authenticated operator diagnostics and are not included in that public status text.
+
 This contract maps to [[review.term:review-provider]].

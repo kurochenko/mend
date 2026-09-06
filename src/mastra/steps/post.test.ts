@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'bun:test'
-import { appendSummaryMarkers } from '@/mastra/review/markers'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { ProjectConfig } from '@/config'
+import { execGit } from '@/lib/exec'
 import { automaticLoopLimitBody } from '@/mastra/fix/automatic-batch'
-import { buildResolvedFindingStateUpdate } from '@/server/thread-sync'
+import { appendSummaryMarkers } from '@/mastra/review/markers'
+import { findMrNoteByBody, findPublishedSummaryForRun } from '@/mastra/review/publish-executor'
 import {
   dedupeInlineComments,
   findingHasInlineAnchor,
   shouldPostFindingAsDiscussion,
 } from '@/mastra/review/publish-plan'
-import { findMrNoteByBody, findPublishedSummaryForRun } from '@/mastra/review/publish-executor'
+import { assertReviewedHeadIsCurrent, preparePostDiffMap } from '@/mastra/steps/post'
+import { buildResolvedFindingStateUpdate } from '@/server/thread-sync'
 
 describe('dedupeInlineComments', () => {
   it('removes identical inline comments while preserving order', () => {
@@ -58,6 +64,62 @@ describe('findMrNoteByBody', () => {
 
     expect(findMrNoteByBody(notes, 'loop limit body')?.id).toBe(2)
     expect(findMrNoteByBody(notes, 'missing')).toBeUndefined()
+  })
+})
+
+describe('post diff preparation', () => {
+  it('rejects reviewed worktree drift before publication', () => {
+    expect(() =>
+      assertReviewedHeadIsCurrent({
+        reviewedHeadSha: 'a'.repeat(40),
+        worktreeHeadSha: 'b'.repeat(40),
+        providerHeadSha: 'a'.repeat(40),
+      }),
+    ).toThrow('does not match reviewed SHA')
+
+    expect(() =>
+      assertReviewedHeadIsCurrent({
+        reviewedHeadSha: 'a'.repeat(40),
+        worktreeHeadSha: 'a'.repeat(40),
+        providerHeadSha: 'b'.repeat(40),
+      }),
+    ).toThrow('changed after review')
+  })
+
+  it('fails before publication when the provider base cannot be fetched', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'mend-post-diff-'))
+    try {
+      await execGit(['init'], cwd)
+      writeFileSync(join(cwd, 'file.txt'), 'content\n')
+      await execGit(['add', 'file.txt'], cwd)
+      await execGit(['commit', '-m', 'initial'], cwd, {
+        config: { 'user.name': 'Mend Test', 'user.email': 'mend-test@example.com' },
+      })
+      const headSha = await execGit(['rev-parse', 'HEAD'], cwd)
+      let publicationStarted = false
+
+      try {
+        await preparePostDiffMap({
+          project: {
+            key: 'post-test',
+            platform: 'gitlab',
+            token: 'token',
+            clone_path: cwd,
+          } as ProjectConfig,
+          worktreePath: cwd,
+          reviewedHeadSha: headSha,
+          diffRefs: { baseSha: 'b'.repeat(40), headSha },
+        })
+        publicationStarted = true
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error)
+        expect((error as Error).message).toContain('Unable to fetch requested commit SHA')
+      }
+
+      expect(publicationStarted).toBe(false)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 })
 

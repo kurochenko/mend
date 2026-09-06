@@ -13,6 +13,7 @@ Rebuilt automatically by the lore CLI on every write command.
 - review.term:review-agent-harness (review) → no links
 - review.term:review-finding (review) → no links
 - review.term:review-provider (review) → no links
+- review.term:review-run-failure (review) → depends-on: review.term:review-agent-harness
 - review.term:review-triage-command (review) → depends-on: review.term:review-finding
 
 ## Invariants
@@ -41,6 +42,7 @@ Rebuilt automatically by the lore CLI on every write command.
 - review.flow:persist-review-finding-state (review) → depends-on: review.term:review-finding
 - review.flow:normalize-provider-webhook (review) → depends-on: review.con:review-provider
 - review.flow:publish-provider-review (review) → depends-on: review.con:review-provider
+- review.flow:publish-review-run-failure (review) → depends-on: review.term:review-run-failure, review.con:review-provider
 - review.flow:prepare-fixer-workspace (review) → depends-on: review.term:fixer-workspace, review.con:workspace-provider
 - review.flow:queue-accepted-finding-fix-batch (review) → depends-on: review.term:review-triage-command, review.term:fix-batch-request, review.term:review-finding
 - review.flow:queue-automatic-fix-batch (review) → depends-on: review.term:review-finding, review.term:fix-batch-request
@@ -64,6 +66,7 @@ Rebuilt automatically by the lore CLI on every write command.
 - review.feat:configure-fixer-workspace-provider (review) → includes: review.term:fixer-workspace, review.con:workspace-provider, review.rule:fixer-workspace-sandbox-config, review.flow:prepare-fixer-workspace
 - review.feat:persist-review-finding-state (review) → includes: review.term:review-finding, review.flow:persist-review-finding-state, review.inv:review-finding-thread-identity
 - review.feat:pluggable-review-provider (review) → includes: review.term:review-provider, review.con:review-provider, review.flow:normalize-provider-webhook, review.flow:publish-provider-review, review.inv:provider-draft-ownership
+- review.feat:publish-review-run-failure (review) → includes: review.term:review-run-failure, review.flow:publish-review-run-failure
 - review.feat:queue-accepted-finding-fix-batch (review) → includes: review.term:fix-batch-request, review.term:review-finding, review.rule:accepted-fix-batch-gates, review.inv:single-active-mr-workflow, review.flow:queue-accepted-finding-fix-batch
 - review.feat:queue-automatic-fix-batch (review) → includes: review.term:review-finding, review.term:fix-batch-request, review.rule:automatic-fix-mode-gates, review.flow:queue-automatic-fix-batch
 - review.feat:replaceable-review-agent-harness (review) → includes: review.term:review-agent-harness, review.con:review-agent-harness, review.flow:run-review-agent, review.inv:structured-review-output
