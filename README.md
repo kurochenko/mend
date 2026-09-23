@@ -82,7 +82,7 @@ Everything is per-project in `mend.yml`:
 review:
   agent:
     harness: codex        # pi | codex | opencode | ensemble
-    model: gpt-5.5
+    model: gpt-6-sol
     thinking_level: medium
   llm:                    # intent classification etc.
     model: anthropic/claude-sonnet-4-20250514

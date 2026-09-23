@@ -17,23 +17,23 @@ projects:
         model: anthropic/claude-sonnet-4-20250514
         thinking_level: medium
       # agent:
-      #   harness: pi # pi, codex, opencode, or ensemble
-      #   model: gpt-5
+      #   harness: ensemble # pi, codex, opencode, or ensemble
+      #   model: gpt-6-sol
       #   thinking_level: medium
       #   timeout_ms: 1200000
       #   ensemble:
       #     finder_harness: codex
-      #     finder_model: gpt-5.5
-      #     finder_thinking_level: low
+      #     finder_model: gpt-6-luna
+      #     finder_thinking_level: high
       #     finder_timeout_ms: 300000
       #     verify_enabled: true
-      #     verifier_model: gpt-5.5
-      #     verifier_thinking_level: low
+      #     verifier_model: gpt-6-luna
+      #     verifier_thinking_level: medium
       #     verifier_timeout_ms: 180000
       #     deep_samples: 2
-      #     deep_model: gpt-5.5
+      #     deep_model: gpt-6-sol
       #     deep_timeout_ms: 1200000
-      #     synthesizer_model: gpt-5.5
+      #     synthesizer_model: gpt-6-sol
       #     synthesizer_timeout_ms: 300000
       template:
         prompt: auto
@@ -63,7 +63,7 @@ projects:
       #   automatic: false
       #   agent:
       #     harness: codex
-      #     model: gpt-5.5
+      #     model: gpt-6-sol
       #     thinking_level: medium
       #     timeout_ms: 1200000
       #   max_loops: 3
@@ -163,6 +163,6 @@ projects:
 #   interval_days: 7
 #   agent:
 #     harness: codex
-#     model: gpt-5.5
+#     model: gpt-6-luna
 #     thinking_level: low
 #     timeout_ms: 120000

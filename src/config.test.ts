@@ -104,17 +104,17 @@ describe('parseProjectsFileConfig', () => {
     expect(config.projects.app?.review.agent.harness).toBe('ensemble')
     expect(config.projects.app?.review.agent.ensemble).toEqual({
       finder_harness: 'codex',
-      finder_model: 'gpt-5.5',
-      finder_thinking_level: 'low',
+      finder_model: 'gpt-6-luna',
+      finder_thinking_level: 'high',
       finder_timeout_ms: 300_000,
       verify_enabled: true,
-      verifier_model: 'gpt-5.5',
-      verifier_thinking_level: 'low',
+      verifier_model: 'gpt-6-luna',
+      verifier_thinking_level: 'medium',
       verifier_timeout_ms: 180_000,
       deep_samples: 2,
-      deep_model: 'gpt-5.5',
+      deep_model: 'gpt-6-sol',
       deep_timeout_ms: 1_200_000,
-      synthesizer_model: 'gpt-5.5',
+      synthesizer_model: 'gpt-6-sol',
       synthesizer_timeout_ms: 300_000,
     })
     expect(config.projects.app?.review.comparison.harness).toBe('ensemble')

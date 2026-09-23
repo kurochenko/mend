@@ -4,6 +4,7 @@ import {
   buildFinderInstructions,
   buildFinderPrompt,
   buildSynthesizerInstructions,
+  buildVerifierPrompt,
   createEnsembleReviewHarness,
   dedupeCandidates,
   detectReviewMode,
@@ -138,6 +139,29 @@ const invokeConfig = {
   changedFiles: ['src/app.ts'],
 }
 
+describe('buildVerifierPrompt', () => {
+  it('checks a demonstrated failure separately from a suggested correction and validates external contracts', () => {
+    const candidate: EnsembleCandidate = {
+      file: 'src/app.ts',
+      line: 12,
+      category: 'correctness',
+      severity: 'bug',
+      title: 'Missing close handshake',
+      body: 'The close callback exits without completing the handshake.',
+      evidence: [{ type: 'file_line', file: 'src/app.ts', line: 12 }],
+      provenance: ['finder'],
+    }
+
+    const prompt = buildVerifierPrompt({ basePrompt, candidate })
+
+    expect(prompt).toContain('Evaluate the claimed failure separately')
+    expect(prompt).toContain('An imprecise fix does not refute a demonstrated material defect')
+    expect(prompt).toContain('runtime, library, protocol, or compatibility behavior')
+    expect(prompt).toContain('Refute a trigger or consequence only with contrary evidence')
+    expect(prompt).toContain('read the exact rule and any more specific documented exception')
+  })
+})
+
 const largeChangedFilesPrompt = (count: number): string =>
   [
     'Review MR !1',
@@ -224,6 +248,13 @@ describe('ensemble prompt construction', () => {
     })
 
     expect(instructions).toContain('## Ensemble Candidate Synthesis')
+    expect(instructions).toContain('Emit each underlying defect exactly once')
+    expect(instructions).toContain('account for every confirmed security candidate')
+    expect(instructions).toContain(
+      'Apply project-rule exceptions only to the behavior and provider',
+    )
+    expect(instructions).toContain('Respect a documented accepted tradeoff')
+    expect(instructions).toContain('Reconcile conflicting verifier verdicts')
     expect(instructions).toContain('"provenance"')
     expect(instructions).toContain('Draft summary')
     expect(instructions).toContain(
@@ -534,7 +565,7 @@ describe('createEnsembleReviewHarness', () => {
 
     expect(result.success).toBe(true)
     expect(result.harness).toBe('ensemble')
-    expect(result.model).toBe('gpt-5.5')
+    expect(result.model).toBe('gpt-6-sol')
     expect(result.output).toContain('No release- or development-blocking defects found.')
     expect(result.output).not.toContain('Synth summary')
     expect(result.inspectedFiles).toEqual(['src/app.ts'])

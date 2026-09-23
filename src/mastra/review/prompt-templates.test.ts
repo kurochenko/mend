@@ -52,6 +52,12 @@ describe('buildReviewSystemPrompt', () => {
     )
     expect(prompt).toContain('Trace call graph and dependency direction')
     expect(prompt).toContain('newly introduced cycles')
+    expect(prompt).toContain('affected callers, boundaries, state or provider work, and consumers')
+    expect(prompt).toContain('input, output, error, identity, and version contracts')
+    expect(prompt).toContain('ordinary retries, stale results, cancellation, partial failure')
+    expect(prompt).toContain('migration order, and mixed-version operation')
+    expect(prompt).toContain('keyboard, focus, and responsive behavior')
+    expect(prompt).toContain('authorization, payload validation, failure handling')
     expect(prompt).toContain('Use judgment on very large MRs')
     expect(prompt).toContain('"version": "v2"')
     expect(prompt).toContain('Output ONLY the JSON object')
@@ -117,10 +123,12 @@ describe('buildReviewSystemPrompt', () => {
     expect(prompt).toContain('Do NOT review or comment on:')
     expect(prompt).toContain('Formatting, whitespace, and import ordering')
     expect(prompt).toContain('Scope anchoring:')
+    expect(prompt).toContain('Respect explicit non-goals and accepted tradeoffs')
     expect(prompt).toContain('Do not invent findings to satisfy categories')
     expect(prompt).toContain('Finding eligibility gate:')
     expect(prompt).toContain('a realistic trigger in intended or ordinary use')
     expect(prompt).toContain('concrete material consequence')
+    expect(prompt).toContain('An inspection or verification gap alone is not a blocking defect')
     expect(prompt).toContain('Every new finding must be release- or development-blocking')
     expect(prompt).toContain('Do not emit "recommended" or "optional" findings')
     expect(prompt).toContain(
@@ -247,6 +255,7 @@ describe('DEFAULT_REVIEW_USER_PROMPT', () => {
 
   it('contains AGENTS.md instruction', () => {
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Read repository root AGENTS.md')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('any review skill it directs you to use')
   })
 })
 
