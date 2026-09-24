@@ -567,7 +567,7 @@ export const buildVerifierPrompt = (input: {
   [
     'Adversarially verify this code-review finding. Read the cited code with tools if needed.',
     'Confirm only if the candidate proves a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Refute it when any element is speculative, transient, optional, or merely generic hardening. Uncertain means the material defect was not established.',
-    'For a candidate with severity smell, apply the smell gate instead: confirm when the cited lines show one of the listed code smells and the diff introduces it or extends or copies the code carrying it. Refute it when the pattern is absent, the diff neither changes the code nor extends, calls into for new behavior, or copies it, or it is only a naming, formatting, or abstraction preference.',
+    'For a candidate with severity smell, apply the smell gate instead: confirm when the cited lines show one of the listed code smells and the diff introduces it or extends, calls into for new behavior, or copies the code carrying it. Refute it when the pattern is absent, the diff neither changes the code nor extends, calls into for new behavior, or copies it, or it is only a naming, formatting, or abstraction preference.',
     'Output JSON {"verdict": "confirmed" | "refuted" | "uncertain", "reason": "..."} with no other text.',
     '',
     'Candidate:',
