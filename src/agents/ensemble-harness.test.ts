@@ -255,6 +255,7 @@ describe('ensemble prompt construction', () => {
     })
 
     expect(prompt).toContain('For a candidate with severity smell, apply the smell gate instead')
+    expect(prompt).toContain('calls into for new behavior')
   })
 
   it('includes the scenario-simulation finder role', () => {

@@ -385,7 +385,7 @@ export const buildReviewSystemPrompt = (input: SystemPromptInput): string => {
     '- Passive prop forwarding through several layers, or a context that holds unrelated state.',
     '- Escape hatches callers maintain by hand, such as manual dependency lists or no-op callbacks for capabilities they lack.',
     '- Silent null or fallback results that hide misuse instead of failing or being typed out.',
-    '- Smell gate: cite the exact lines showing the pattern, state whether this diff introduced it or extended it, explain how it will compound on the next change, and give the concrete refactor (target module or shape). Use category architecture, duplication, or convention.',
+    '- Smell gate: cite the exact lines showing the pattern, state whether this diff introduced it or extended it, explain how it will compound on the next change, and give the concrete refactor (target module or shape). Use category architecture, duplication, or convention. List the changed file that introduces, extends, or uses the smell in files and evidence, alongside any existing file that carries it.',
     '- Do not report naming, formatting, or abstraction preferences that do not match one of these patterns.',
     '',
     'Be concise and high-signal. No low-value nits.',
