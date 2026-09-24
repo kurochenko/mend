@@ -690,6 +690,11 @@ export const detectReviewMode = (instructions: string): EnsembleReviewMode =>
 const isInDelta = (files: string[], changedFiles: string[]): boolean =>
   files.length === 0 || files.some((file) => changedFiles.includes(file))
 
+const findingDeltaFiles = (finding: ReviewOutputV2['findings'][number]): string[] => [
+  ...(finding.files ?? []),
+  ...finding.evidence.flatMap((evidence) => (evidence.type === 'file_line' ? [evidence.file] : [])),
+]
+
 export const applyAssessmentPolicy = (
   output: ReviewOutputV2,
   params: {
@@ -701,7 +706,9 @@ export const applyAssessmentPolicy = (
   const applyDeltaFilter = params.reviewMode === 'update' && params.changedFiles.length > 0
 
   const findings = applyDeltaFilter
-    ? output.findings.filter((finding) => isInDelta(finding.files ?? [], params.changedFiles))
+    ? output.findings.filter((finding) =>
+        isInDelta(findingDeltaFiles(finding), params.changedFiles),
+      )
     : output.findings
   const inlineComments = applyDeltaFilter
     ? output.inlineComments.filter((comment) => isInDelta([comment.file], params.changedFiles))

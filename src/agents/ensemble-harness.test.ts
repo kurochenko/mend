@@ -712,6 +712,33 @@ describe('applyAssessmentPolicy', () => {
     expect(result.assessment).toBe('approve')
   })
 
+  it('keeps update-mode findings whose evidence cites a changed file', () => {
+    const result = applyAssessmentPolicy(
+      policyOutput({
+        findings: [
+          {
+            id: 'slug-format-smell',
+            category: 'duplication',
+            severity: 'smell',
+            actionability: 'required',
+            scope: 'cross_file',
+            title: 'Slug format built in several places',
+            body: 'The delta adds another caller of the duplicated helper.',
+            files: ['src/legacy.ts'],
+            evidence: [
+              { type: 'file_line', file: 'src/legacy.ts', line: 5 },
+              { type: 'file_line', file: 'src/app.ts', line: 2 },
+            ],
+          },
+        ],
+      }),
+      { reviewMode: 'update', changedFiles: ['src/app.ts'] },
+    )
+
+    expect(result.findings).toHaveLength(1)
+    expect(result.assessment).toBe('request_changes')
+  })
+
   it('keeps in-delta gate findings gating during update reviews', () => {
     const result = applyAssessmentPolicy(
       policyOutput({
