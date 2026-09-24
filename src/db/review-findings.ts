@@ -6,7 +6,7 @@ import type { ReviewProvider } from '@/lib/review-threads'
 
 export type ReviewFindingRecord = InferSelectModel<typeof reviewFindings>
 
-type ReviewFindingSeverity = 'bug' | 'security' | 'performance' | 'suggestion'
+type ReviewFindingSeverity = 'bug' | 'security' | 'performance' | 'smell' | 'suggestion'
 
 type ReviewFindingSeverityCounts = Record<ReviewFindingSeverity, number>
 
@@ -176,6 +176,7 @@ export const countReviewFindingSeveritiesForMr = async (params: {
     bug: 0,
     security: 0,
     performance: 0,
+    smell: 0,
     suggestion: 0,
   }
 
@@ -197,12 +198,8 @@ export const countReviewFindingSeveritiesForMr = async (params: {
     }
 
     const severity = (value as Record<string, unknown>).severity
-    switch (severity) {
-      case 'bug':
-      case 'security':
-      case 'performance':
-      case 'suggestion':
-        counts[severity] += 1
+    if (typeof severity === 'string' && Object.hasOwn(counts, severity)) {
+      counts[severity as ReviewFindingSeverity] += 1
     }
   }
 

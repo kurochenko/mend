@@ -68,7 +68,7 @@ const reviewCategorySchema = z.enum([
   'testing',
 ])
 
-const reviewSeveritySchema = z.enum(['bug', 'security', 'performance', 'suggestion'])
+const reviewSeveritySchema = z.enum(['bug', 'security', 'performance', 'smell', 'suggestion'])
 
 const finderCandidateSchema = z
   .object({
@@ -150,7 +150,7 @@ export const finderRoles: FinderRole[] = [
   {
     id: 'conventions-structure',
     addendum:
-      'Check project conventions and the Structural signals section. Report a convention or structural issue only when the current change creates a realistic material blocker; do not report optional simplification, over-engineering, abstraction, indirection, or configurability advice.',
+      'Check project conventions, the Structural signals section, and the Code smells list. Hunt each listed smell in changed code and in existing code the diff extends or copies: grep for repeated literals and formats, follow imports across feature folders, and read the helpers the diff calls. Report smells with severity smell. Report other convention or structural issues only when the current change creates a realistic material blocker; do not report optional simplification, over-engineering, abstraction, indirection, or configurability advice that matches no listed smell.',
   },
   {
     id: 'scenario-simulation',
@@ -178,7 +178,7 @@ const reducedFinderSchemaSection = [
   '      "file": "relative/path optional",',
   '      "line": 42,',
   '      "category": "correctness" | "architecture" | "duplication" | "convention" | "dead_code" | "performance" | "security" | "testing",',
-  '      "severity": "bug" | "security" | "performance" | "suggestion",',
+  '      "severity": "bug" | "security" | "performance" | "smell" | "suggestion",',
   '      "title": "Candidate title",',
   '      "body": "Defensible issue description",',
   '      "evidence": [',
@@ -566,6 +566,7 @@ export const buildVerifierPrompt = (input: {
   [
     'Adversarially verify this code-review finding. Read the cited code with tools if needed.',
     'Confirm only if the candidate proves a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Refute it when any element is speculative, transient, optional, or merely generic hardening. Uncertain means the material defect was not established.',
+    'For a candidate with severity smell, apply the smell gate instead: confirm when the cited lines show one of the listed code smells and the diff introduces it or extends or copies the code carrying it. Refute it when the pattern is absent, the code is untouched by the diff, or it is only a naming, formatting, or abstraction preference.',
     'Output JSON {"verdict": "confirmed" | "refuted" | "uncertain", "reason": "..."} with no other text.',
     '',
     'Candidate:',
@@ -636,7 +637,7 @@ export const buildSynthesizerInstructions = (input: {
       : 'If the base prompt does not contain previous-review context, return an empty resolutionVerdicts array or omit it.'
   const updateModeInstruction =
     input.reviewMode === 'update'
-      ? 'This is a consecutive UPDATE review. Its purpose is to verify previous findings were addressed and to check the new delta — not to re-audit the whole MR. Report a new finding only when the delta introduces a verified material defect that blocks merging. Omit everything else. If the delta addresses the previous findings and introduces no new defects, approve.'
+      ? 'This is a consecutive UPDATE review. Its purpose is to verify previous findings were addressed and to check the new delta — not to re-audit the whole MR. Report a new finding only when the delta introduces a verified material defect or a code smell that blocks merging. Omit everything else. If the delta addresses the previous findings and introduces no new defects or smells, approve.'
       : null
 
   return [
@@ -645,6 +646,7 @@ export const buildSynthesizerInstructions = (input: {
     '## Ensemble Candidate Synthesis',
     '',
     'Apply the finding eligibility gate again. Keep only candidates with a realistic intended-use trigger, a concrete material consequence, and a proportionate remedy. Drop theoretical risks, optional hardening, generic best-practice gaps, and non-blocking suggestions even if an earlier stage retained them.',
+    'Keep confirmed smell candidates as findings with severity smell under the smell gate; they are blocking, not suggestions. Merge smells that describe the same underlying pattern into one finding listing every cited location.',
     'Every emitted finding must block release or continued development and use actionability required. It is valid and preferred to emit zero findings.',
     'Never invent new findings beyond the candidate list.',
     previousContextInstruction,
@@ -726,7 +728,11 @@ const applyPolicyToResult = (
   }
 }
 
-const updateModeFinderRoleIds = new Set<FinderRoleId>(['diff-correctness', 'cross-file-impact'])
+const updateModeFinderRoleIds = new Set<FinderRoleId>([
+  'diff-correctness',
+  'cross-file-impact',
+  'conventions-structure',
+])
 
 const rolesForMode = (mode: EnsembleReviewMode): FinderRole[] =>
   mode === 'update'

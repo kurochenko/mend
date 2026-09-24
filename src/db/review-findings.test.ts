@@ -137,6 +137,7 @@ if (!testDatabaseUrl) {
         bug: 1,
         security: 0,
         performance: 0,
+        smell: 0,
         suggestion: 1,
       })
     })

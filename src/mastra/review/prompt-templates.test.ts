@@ -111,6 +111,18 @@ describe('buildReviewSystemPrompt', () => {
     )
   })
 
+  it('reports code smells in changed and extended code as blocking findings', () => {
+    const prompt = buildReviewSystemPrompt(baseInput)
+
+    expect(prompt).toContain('Code smells:')
+    expect(prompt).toContain('findings with severity "smell" and actionability "required"')
+    expect(prompt).toContain(
+      'existing code the diff extends, calls into for new behavior, or copies',
+    )
+    expect(prompt).toContain('Data encoded in strings and parsed back')
+    expect(prompt).toContain('except code smells, which use the smell gate below')
+  })
+
   it('includes review guardrails', () => {
     const prompt = buildReviewSystemPrompt(baseInput)
 
@@ -239,8 +251,9 @@ describe('DEFAULT_REVIEW_USER_PROMPT', () => {
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Do not require or request UI/component tests')
   })
 
-  it('requires material release or development blockers across every focus area', () => {
-    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Across every focus area')
+  it('requires material blockers outside smells and includes the smell focus area', () => {
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('code and architecture smells')
+    expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Across the other focus areas')
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('realistic material defects')
     expect(DEFAULT_REVIEW_USER_PROMPT).toContain('Omit theoretical risks, optional hardening')
   })

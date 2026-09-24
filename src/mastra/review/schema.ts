@@ -2,7 +2,13 @@ import { z } from 'zod'
 import { extractJson } from '@/lib/json'
 import { reviewTemplateIds } from '@/mastra/review/intents'
 
-export const reviewSeveritySchema = z.enum(['bug', 'security', 'performance', 'suggestion'])
+export const reviewSeveritySchema = z.enum([
+  'bug',
+  'security',
+  'performance',
+  'smell',
+  'suggestion',
+])
 
 const fileLineEvidenceSchema = z.object({
   type: z.literal('file_line'),

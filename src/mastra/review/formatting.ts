@@ -4,6 +4,7 @@ const SEVERITY_PREFIX: Record<ReviewInlineComment['severity'], string> = {
   bug: ':bug: **Bug:**',
   security: ':lock: **Security:**',
   performance: ':zap: **Performance:**',
+  smell: ':nose: **Smell:**',
   suggestion: ':bulb: **Suggestion:**',
 }
 

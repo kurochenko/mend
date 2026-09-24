@@ -307,6 +307,7 @@ describe('buildStatusNoteBody', () => {
         bug: 2,
         security: 1,
         performance: 0,
+        smell: 0,
         suggestion: 1,
       },
       findingStateCounts: { pending: 1 },
@@ -319,12 +320,13 @@ describe('buildStatusNoteBody', () => {
         bug: 0,
         security: 0,
         performance: 0,
+        smell: 0,
         suggestion: 0,
       },
       updatedAt: '2026-03-07T19:00:00.000Z',
     })
 
-    expect(body).toContain('**Findings by severity (tracked on MR):** 4 · 2🐞 1🔒 0⚡ 1💡')
+    expect(body).toContain('**Findings by severity (tracked on MR):** 4 · 2🐞 1🔒 0⚡ 0👃 1💡')
     expect(body.indexOf('**Findings by severity (tracked on MR):**')).toBeLessThan(
       body.indexOf('### Finding Decisions'),
     )

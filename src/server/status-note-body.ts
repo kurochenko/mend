@@ -172,7 +172,7 @@ const extractAssessment = (result: unknown): string | null => {
   return typeof assessment === 'string' ? assessment : null
 }
 
-type FindingSeverity = 'bug' | 'security' | 'performance' | 'suggestion'
+type FindingSeverity = 'bug' | 'security' | 'performance' | 'smell' | 'suggestion'
 
 type FindingSeverityCounts = Record<FindingSeverity, number>
 
@@ -191,6 +191,7 @@ const extractFindingSeverityCounts = (result: unknown): FindingSeverityCounts | 
     bug: 0,
     security: 0,
     performance: 0,
+    smell: 0,
     suggestion: 0,
   }
 
@@ -201,12 +202,8 @@ const extractFindingSeverityCounts = (result: unknown): FindingSeverityCounts | 
       }
 
       const severity = (finding as Record<string, unknown>).severity
-      switch (severity) {
-        case 'bug':
-        case 'security':
-        case 'performance':
-        case 'suggestion':
-          counts[severity] += 1
+      if (typeof severity === 'string' && Object.hasOwn(counts, severity)) {
+        counts[severity as FindingSeverity] += 1
       }
     }
   }
@@ -308,6 +305,7 @@ const formatHistoryFindingCounts = (counts: FindingSeverityCounts | null): strin
     counts.bug > 0 ? `${counts.bug}🐞` : null,
     counts.security > 0 ? `${counts.security}🔒` : null,
     counts.performance > 0 ? `${counts.performance}⚡` : null,
+    counts.smell > 0 ? `${counts.smell}👃` : null,
     counts.suggestion > 0 ? `${counts.suggestion}💡` : null,
   ].filter((group): group is string => group !== null)
 
@@ -381,7 +379,7 @@ const renderTrackedFindingSeverityCounts = (
 
   return [
     '',
-    `**Findings by severity (tracked on MR):** ${total} · ${counts.bug}🐞 ${counts.security}🔒 ${counts.performance}⚡ ${counts.suggestion}💡`,
+    `**Findings by severity (tracked on MR):** ${total} · ${counts.bug}🐞 ${counts.security}🔒 ${counts.performance}⚡ ${counts.smell}👃 ${counts.suggestion}💡`,
   ]
 }
 

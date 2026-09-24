@@ -48,7 +48,7 @@ export interface PreviousInlineComment {
   identity: PriorBlockerIdentity | null
   file: string
   line: number
-  severity: 'bug' | 'security' | 'performance' | 'suggestion'
+  severity: 'bug' | 'security' | 'performance' | 'smell' | 'suggestion'
   actionability: 'required'
   body: string
   discussionId: string | null

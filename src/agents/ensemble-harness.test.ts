@@ -4,6 +4,7 @@ import {
   buildFinderInstructions,
   buildFinderPrompt,
   buildSynthesizerInstructions,
+  buildVerifierPrompt,
   createEnsembleReviewHarness,
   dedupeCandidates,
   detectReviewMode,
@@ -233,6 +234,27 @@ describe('ensemble prompt construction', () => {
     expect(instructions).toContain('Verification stats:')
     expect(instructions).toContain('Apply the finding eligibility gate again')
     expect(instructions).toContain('Every emitted finding must block release')
+    expect(instructions).toContain(
+      'Keep confirmed smell candidates as findings with severity smell',
+    )
+  })
+
+  it('verifies smell candidates against the smell gate', () => {
+    const prompt = buildVerifierPrompt({
+      basePrompt: baseInstructions,
+      candidate: {
+        file: 'src/app.ts',
+        line: 12,
+        category: 'duplication',
+        severity: 'smell',
+        title: 'URL segment built in several places',
+        body: 'Body',
+        evidence: [{ type: 'file_line', file: 'src/app.ts', line: 12 }],
+        provenance: ['conventions-structure'],
+      },
+    })
+
+    expect(prompt).toContain('For a candidate with severity smell, apply the smell gate instead')
   })
 
   it('includes the scenario-simulation finder role', () => {
@@ -767,6 +789,7 @@ describe('update-mode ensemble slimming', () => {
     const finderDirs = sessionDirs.filter((dir) => dir.includes('finder-'))
     expect(finderDirs.some((dir) => dir.includes('diff-correctness'))).toBe(true)
     expect(finderDirs.some((dir) => dir.includes('cross-file-impact'))).toBe(true)
+    expect(finderDirs.some((dir) => dir.includes('conventions-structure'))).toBe(true)
     expect(finderDirs.some((dir) => dir.includes('scenario-simulation'))).toBe(false)
     expect(finderDirs.some((dir) => dir.includes('tests-adequacy'))).toBe(false)
     expect(sessionDirs.filter((dir) => dir.includes('deep-')).length).toBe(1)
