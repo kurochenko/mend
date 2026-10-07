@@ -1,4 +1,4 @@
-import { and, desc, eq, type SQL } from 'drizzle-orm'
+import { and, desc, eq, ne, type SQL } from 'drizzle-orm'
 import type { InferSelectModel } from 'drizzle-orm'
 import { getDb } from '@/db/client'
 import { reviewRunStatusEnum, reviewRuns } from '@/db/schema'
@@ -7,6 +7,8 @@ import type { MrReviewInput } from '@/lib/review-run-input'
 export type ReviewRunRecord = InferSelectModel<typeof reviewRuns>
 export type ReviewRunStatus = (typeof reviewRunStatusEnum.enumValues)[number]
 export type ReviewRunSource = 'webhook' | 'replay_iid' | 'replay_run' | 'replay_benchmark'
+
+const benchmarkSource: ReviewRunSource = 'replay_benchmark'
 
 interface CreateReviewRunParams {
   id: string
@@ -197,6 +199,7 @@ export const getLatestSuccessfulReviewRun = async (
         eq(reviewRuns.projectKey, params.projectKey),
         eq(reviewRuns.mrIid, params.mrIid),
         eq(reviewRuns.status, 'success'),
+        ne(reviewRuns.source, benchmarkSource),
       ),
     )
     .orderBy(desc(reviewRuns.createdAt))
@@ -218,6 +221,7 @@ export const hasSuccessfulReviewRunForSha = async (
         eq(reviewRuns.mrIid, params.mrIid),
         eq(reviewRuns.commitSha, params.sha),
         eq(reviewRuns.status, 'success'),
+        ne(reviewRuns.source, benchmarkSource),
       ),
     )
     .limit(1)
@@ -246,6 +250,7 @@ export const countPostedSuccessfulReviewRuns = async (
         eq(reviewRuns.projectKey, params.projectKey),
         eq(reviewRuns.mrIid, params.mrIid),
         eq(reviewRuns.status, 'success'),
+        ne(reviewRuns.source, benchmarkSource),
       ),
     )
 
