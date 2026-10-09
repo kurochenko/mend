@@ -1,7 +1,10 @@
+import { createHmac } from 'node:crypto'
 import { describe, expect, test } from 'bun:test'
-import type { GitLabProjectConfig } from '@/config'
+import type { Mastra } from '@mastra/core'
+import type { AppConfig, GitLabProjectConfig } from '@/config'
 import {
   classifyWebhook,
+  createGitlabWebhookRoute,
   extractMrLabels,
   type MrWebhookPayload,
   type WebhookPayload,
@@ -232,5 +235,99 @@ describe('extractMrLabels', () => {
     const result = extractMrLabels(payload)
 
     expect(result).toEqual(['bug', 'review'])
+  })
+})
+
+describe('gitlab webhook route authentication', () => {
+  const signingKey = Buffer.from('test-signing-key')
+  const signingToken = `whsec_${signingKey.toString('base64')}`
+  const body = JSON.stringify(makeMrPayload({ draft: true }))
+  const messageId = 'msg_1'
+
+  const sign = (timestamp: string, payload = body) =>
+    `v1,${createHmac('sha256', signingKey).update(`${messageId}.${timestamp}.${payload}`).digest('base64')}`
+
+  const nowTimestamp = () => String(Math.floor(Date.now() / 1000))
+
+  const post = (headers: Record<string, string>, project = makeProject()) =>
+    createGitlabWebhookRoute(
+      { projects: new Map([[project.key, project]]), env: {} } as unknown as AppConfig,
+      {} as Mastra,
+    ).request(`/${project.key}`, { method: 'POST', headers, body })
+
+  const signedHeaders = (timestamp: string, signature = sign(timestamp)) => ({
+    'webhook-id': messageId,
+    'webhook-timestamp': timestamp,
+    'webhook-signature': signature,
+  })
+
+  test('accepts a valid signature when a signing token is configured', async () => {
+    const res = await post(
+      signedHeaders(nowTimestamp()),
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { type: string }).type).toBe('ignored')
+  })
+
+  test('accepts a valid signature among multiple space-separated signatures', async () => {
+    const timestamp = nowTimestamp()
+    const res = await post(
+      signedHeaders(timestamp, `v1,bogus ${sign(timestamp)}`),
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  test('rejects a signature over a different body', async () => {
+    const timestamp = nowTimestamp()
+    const res = await post(
+      signedHeaders(timestamp, sign(timestamp, '{"tampered":true}')),
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(401)
+  })
+
+  test('rejects a stale timestamp', async () => {
+    const stale = String(Math.floor(Date.now() / 1000) - 600)
+    const res = await post(
+      signedHeaders(stale),
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(401)
+  })
+
+  test('does not fall back to the secret token when a signature is present but invalid', async () => {
+    const res = await post(
+      { ...signedHeaders(nowTimestamp(), 'v1,bogus'), 'X-Gitlab-Token': 'secret' },
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(401)
+  })
+
+  test('falls back to the secret token when no signature header is sent', async () => {
+    const res = await post(
+      { 'X-Gitlab-Token': 'secret' },
+      makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  test('uses the secret token when no signing token is configured', async () => {
+    const res = await post({ ...signedHeaders(nowTimestamp()), 'X-Gitlab-Token': 'secret' })
+
+    expect(res.status).toBe(200)
+  })
+
+  test('rejects a wrong secret token', async () => {
+    const res = await post({ 'X-Gitlab-Token': 'wrong' })
+
+    expect(res.status).toBe(401)
   })
 })

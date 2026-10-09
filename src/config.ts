@@ -227,6 +227,10 @@ const sharedProjectSchema = z.object({
 
 const gitlabProjectSchema = sharedProjectSchema.extend({
   platform: z.literal('gitlab'),
+  webhook_signing_token: z
+    .string()
+    .regex(/^whsec_.+/, 'must start with whsec_')
+    .optional(),
   project_id: z.union([z.number().int().positive(), z.string().min(1)]),
 })
 
