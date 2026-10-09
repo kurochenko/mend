@@ -28,6 +28,7 @@ Rebuilt automatically by the lore CLI on every write command.
 - review.rule:accepted-fix-batch-gates (review) → constrains: review.flow:queue-accepted-finding-fix-batch
 - review.rule:automatic-fix-mode-gates (review) → constrains: review.flow:queue-automatic-fix-batch
 - review.rule:fixer-workspace-sandbox-config (review) → depends-on: review.term:fixer-workspace; constrains: review.flow:prepare-fixer-workspace
+- review.rule:gitlab-webhook-authentication (review) → constrains: review.flow:normalize-provider-webhook
 - review.rule:triage-command-reasons (review) → constrains: review.flow:apply-finding-triage-command
 
 ## Events
@@ -63,7 +64,7 @@ Rebuilt automatically by the lore CLI on every write command.
 - review.feat:commit-push-and-review-fix-batch (review) → includes: review.term:fix-batch-request, review.term:fixer-agent-result, review.flow:commit-push-fix-batch, review.inv:fix-batch-source-repository
 - review.feat:configure-fixer-workspace-provider (review) → includes: review.term:fixer-workspace, review.con:workspace-provider, review.rule:fixer-workspace-sandbox-config, review.flow:prepare-fixer-workspace
 - review.feat:persist-review-finding-state (review) → includes: review.term:review-finding, review.flow:persist-review-finding-state, review.inv:review-finding-thread-identity
-- review.feat:pluggable-review-provider (review) → includes: review.term:review-provider, review.con:review-provider, review.flow:normalize-provider-webhook, review.flow:publish-provider-review, review.inv:provider-draft-ownership
+- review.feat:pluggable-review-provider (review) → includes: review.term:review-provider, review.con:review-provider, review.flow:normalize-provider-webhook, review.flow:publish-provider-review, review.inv:provider-draft-ownership, review.rule:gitlab-webhook-authentication
 - review.feat:queue-accepted-finding-fix-batch (review) → includes: review.term:fix-batch-request, review.term:review-finding, review.rule:accepted-fix-batch-gates, review.inv:single-active-mr-workflow, review.flow:queue-accepted-finding-fix-batch
 - review.feat:queue-automatic-fix-batch (review) → includes: review.term:review-finding, review.term:fix-batch-request, review.rule:automatic-fix-mode-gates, review.flow:queue-automatic-fix-batch
 - review.feat:replaceable-review-agent-harness (review) → includes: review.term:review-agent-harness, review.con:review-agent-harness, review.flow:run-review-agent, review.inv:structured-review-output

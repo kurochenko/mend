@@ -4,6 +4,7 @@ projects:
     url: https://gitlab.com
     token: ${BACKEND_GITLAB_TOKEN}
     webhook_secret: ${BACKEND_WEBHOOK_SECRET}
+    # webhook_signing_token: ${BACKEND_WEBHOOK_SIGNING_TOKEN}
     project_id: 123
     repo_url: git@gitlab.com:org/backend.git
     default_branch: main

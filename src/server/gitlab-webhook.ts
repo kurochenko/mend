@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Hono } from 'hono'
@@ -11,6 +12,7 @@ import type { ReviewWebhookEvent } from '@/server/webhook-events'
 const FIXTURES_DIR = resolve('fixtures', 'webhooks')
 const RECORDING_CONCURRENCY = 2
 const MAX_PENDING_RECORDINGS = 200
+const SIGNATURE_TOLERANCE_SECONDS = 300
 
 interface QueuedRecording {
   projectKey: string
@@ -227,6 +229,74 @@ export const classifyWebhook = (
   }
 }
 
+const constantTimeEquals = (actual: string, expected: string): boolean => {
+  const actualBuffer = Buffer.from(actual)
+  const expectedBuffer = Buffer.from(expected)
+  return (
+    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
+  )
+}
+
+interface GitlabSignatureInput {
+  signingToken: string
+  messageId: string | undefined
+  timestamp: string | undefined
+  signatures: string | undefined
+  rawBody: string
+  nowSeconds: number
+}
+
+const verifyGitlabSignature = ({
+  signingToken,
+  messageId,
+  timestamp,
+  signatures,
+  rawBody,
+  nowSeconds,
+}: GitlabSignatureInput): boolean => {
+  if (!messageId || !timestamp || !signatures) {
+    return false
+  }
+
+  const timestampSeconds = Number(timestamp)
+  if (
+    !Number.isInteger(timestampSeconds) ||
+    Math.abs(nowSeconds - timestampSeconds) > SIGNATURE_TOLERANCE_SECONDS
+  ) {
+    return false
+  }
+
+  const key = Buffer.from(signingToken.replace(/^whsec_/, ''), 'base64')
+  const digest = createHmac('sha256', key)
+    .update(`${messageId}.${timestamp}.${rawBody}`)
+    .digest('base64')
+  const expected = `v1,${digest}`
+  return signatures
+    .split(' ')
+    .some((signature) => signature !== '' && constantTimeEquals(signature, expected))
+}
+
+const isAuthorizedWebhook = (
+  project: GitLabProjectConfig,
+  header: (name: string) => string | undefined,
+  rawBody: string,
+): boolean => {
+  const signatures = header('webhook-signature')
+  if (project.webhook_signing_token && signatures) {
+    return verifyGitlabSignature({
+      signingToken: project.webhook_signing_token,
+      messageId: header('webhook-id'),
+      timestamp: header('webhook-timestamp'),
+      signatures,
+      rawBody,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    })
+  }
+
+  const token = header('X-Gitlab-Token')
+  return token !== undefined && constantTimeEquals(token, project.webhook_secret)
+}
+
 export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
   const { projects } = config
   const app = new Hono()
@@ -241,12 +311,17 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
       return c.json({ error: 'unknown project' }, 404)
     }
 
-    const token = c.req.header('X-Gitlab-Token')
-    if (token !== project.webhook_secret) {
+    const rawBody = await c.req.text()
+    if (!isAuthorizedWebhook(project, (name) => c.req.header(name), rawBody)) {
       return c.json({ error: 'unauthorized' }, 401)
     }
 
-    const raw = await c.req.json()
+    let raw: unknown
+    try {
+      raw = JSON.parse(rawBody)
+    } catch {
+      return c.json({ error: 'invalid payload' }, 400)
+    }
     const parseResult = webhookPayloadSchema.safeParse(raw)
     if (!parseResult.success) {
       return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
