@@ -85,11 +85,10 @@ Classification can change as evidence improves.
 
 ## Choose the repair boundary
 
-Identify the invariant and its owner before editing. Check `.spec/` flows and
-invariants, and apply `feature-layout` when ownership or dependency direction is
-implicated: webhook handlers route, steps orchestrate, harnesses run agents,
-provider adapters own provider API details, `src/db/` owns persistence, the
-post/publish layer owns posting safety.
+Identify the invariant and its owner before editing, and apply `feature-layout`
+when ownership or dependency direction is implicated: webhook handlers route,
+steps orchestrate, harnesses run agents, provider adapters own provider API
+details, `src/db/` owns persistence, the post/publish layer owns posting safety.
 
 A local repair fits when the owning contract is sound and one implementation
 violates it. Zoom out when several failures need the same rule in different

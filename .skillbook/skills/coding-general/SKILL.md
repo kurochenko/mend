@@ -11,9 +11,9 @@ metadata:
 # Coding General
 
 Implement the smallest complete change that satisfies the request and preserves review
-safety, idempotency, and clear failure states. Read `AGENTS.md` and the relevant `.spec/`
-context, then inspect the affected execution path (webhook -> queue -> workflow step ->
-harness/provider/db) before editing. For an incident or recurring failure, use
+safety, idempotency, and clear failure states. Read `AGENTS.md`, then inspect the
+affected execution path (webhook -> queue -> workflow step -> harness/provider/db)
+before editing. For an incident or recurring failure, use
 `diagnose-repair` to establish the cause first.
 
 ## Ownership and scope

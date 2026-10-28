@@ -113,22 +113,6 @@ Current core skills:
 - `gitlab-mr-review` — GitLab MR review workflow
 - `typescript-cli` — CLI script conventions
 
-## Living Spec
-
-This project uses a Living Spec — a structured domain knowledge base in `.spec/`.
-Before implementing any feature or behavior change:
-
-1. Read `.spec/SPEC.md` for the full meta-model and workflow instructions
-2. Read `.spec/INDEX.md` for the current graph of all defined primitives
-3. Identify the Feature you are implementing and traverse its dependencies
-4. If any referenced primitive is missing or incomplete — stop and ask, do not guess
-5. Propose spec updates and wait for confirmation before writing any code
-
-When reviewing code, verify that implementation matches the spec (flows, invariants, rules)
-and that no undocumented behavior exists without a corresponding primitive.
-
-Use the `lore` CLI to query and update the spec. See `.spec/SPEC.md` for the full command reference.
-
 ## Rules
 
 - **No barrel exports.** Import directly from the source file instead of index.ts barrel files. This makes dependencies explicit and avoids circular import issues.
