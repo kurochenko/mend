@@ -82,6 +82,14 @@ const createReviewCustomTools = (context7ApiKey: string | null | undefined): Too
   return [createContext7Tool(context7ApiKey)]
 }
 
+export const getFinalAssistantError = (messages: AgentSession['messages']): string | undefined => {
+  const lastAssistant = messages.findLast((message) => message.role === 'assistant')
+  if (lastAssistant?.role !== 'assistant' || lastAssistant.stopReason !== 'error') {
+    return undefined
+  }
+  return lastAssistant.errorMessage ?? 'Pi assistant response ended with an error'
+}
+
 const parseModelString = (model: string): { provider: string; modelId: string } => {
   const slashIndex = model.indexOf('/')
   if (slashIndex === -1) {
@@ -203,6 +211,11 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
       `Pi review timed out after ${timeoutMs}ms`,
       config.signal,
     )
+
+    const assistantError = getFinalAssistantError(session.messages)
+    if (assistantError) {
+      return { success: false, output, sessionFile: session.sessionFile, error: assistantError }
+    }
 
     return {
       success: true,
