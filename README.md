@@ -70,7 +70,8 @@ In Docker, logins persist in the `pi-auth` / `codex-auth` / `opencode-auth` volu
 2. **Expose port 3147** to the internet however you like — reverse proxy, Tailscale funnel, or a Cloudflare tunnel (`bun run tunnel:webhooks:quick` starts an ad-hoc one for testing).
 3. **Add the webhook** in GitLab: *Project → Settings → Webhooks*.
    - URL: `https://<your-host>/webhooks/gitlab/<project-key>` (the key from `mend.yml`, e.g. `backend`)
-   - Secret token: the value of your `webhook_secret`
+   - Signing token (recommended): select **Generate signing token** and put the `whsec_…` value into `webhook_signing_token`. Mend then requires a valid HMAC-SHA256 `webhook-signature` on every request and rejects any request that is unsigned, whose body was changed, or whose timestamp is more than 5 minutes old. The secret token is not checked, so `webhook_secret` can be omitted and the secret token removed from GitLab.
+   - Secret token (without a signing token): the value of your `webhook_secret`
    - Triggers: **Merge request events** and **Comments** (note events)
 4. Open an MR (or mark one ready) — Mend queues a review, posts a status note, and publishes findings when done.
 

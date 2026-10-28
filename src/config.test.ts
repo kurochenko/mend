@@ -38,6 +38,31 @@ const githubProject = {
 }
 
 describe('parseProjectsFileConfig', () => {
+  test('allows a gitlab project with only a webhook signing token', () => {
+    const { webhook_secret: _secret, ...signedProject } = baseProject
+    const config = parseProjectsFileConfig({
+      projects: {
+        app: { ...signedProject, webhook_signing_token: 'whsec_dGVzdA==' },
+      },
+    })
+
+    expect(config.projects.app?.platform).toBe('gitlab')
+  })
+
+  test('rejects a gitlab project without a webhook secret or signing token', () => {
+    const { webhook_secret: _secret, ...unsignedProject } = baseProject
+
+    expect(() => parseProjectsFileConfig({ projects: { app: unsignedProject } })).toThrow(
+      'gitlab projects need webhook_secret or webhook_signing_token',
+    )
+  })
+
+  test('requires a webhook secret for github projects', () => {
+    const { webhook_secret: _secret, ...unsignedProject } = githubProject
+
+    expect(() => parseProjectsFileConfig({ projects: { app: unsignedProject } })).toThrow()
+  })
+
   test('keeps fixer workspace optional for existing project configs', () => {
     const config = parseProjectsFileConfig({
       projects: {

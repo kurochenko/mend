@@ -217,7 +217,6 @@ const reviewSchema = z.object({
 const sharedProjectSchema = z.object({
   url: z.string().url(),
   token: z.string().min(1),
-  webhook_secret: z.string().min(1),
   repo_url: z.string().min(1),
   default_branch: z.string().default('main'),
   trigger: triggerSchema.default({ mode: 'ready' }),
@@ -227,16 +226,33 @@ const sharedProjectSchema = z.object({
 
 const gitlabProjectSchema = sharedProjectSchema.extend({
   platform: z.literal('gitlab'),
+  webhook_secret: z.string().min(1).optional(),
+  webhook_signing_token: z
+    .string()
+    .regex(/^whsec_.+/, 'must start with whsec_')
+    .optional(),
   project_id: z.union([z.number().int().positive(), z.string().min(1)]),
 })
 
 const githubProjectSchema = sharedProjectSchema.extend({
   platform: z.literal('github'),
   url: z.string().url().default('https://github.com'),
+  webhook_secret: z.string().min(1),
   repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'repo must match owner/name'),
 })
 
-const projectSchema = z.discriminatedUnion('platform', [gitlabProjectSchema, githubProjectSchema])
+const projectSchema = z
+  .discriminatedUnion('platform', [gitlabProjectSchema, githubProjectSchema])
+  .refine(
+    (project) =>
+      project.platform !== 'gitlab' ||
+      project.webhook_secret !== undefined ||
+      project.webhook_signing_token !== undefined,
+    {
+      message: 'gitlab projects need webhook_secret or webhook_signing_token',
+      path: ['webhook_secret'],
+    },
+  )
 
 export type GitLabProjectConfig = z.infer<typeof gitlabProjectSchema> & {
   key: string

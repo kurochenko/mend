@@ -13,10 +13,12 @@ links:
     target: 'review.flow:publish-provider-review'
   - edge: includes
     target: 'review.inv:provider-draft-ownership'
+  - edge: includes
+    target: 'review.rule:gitlab-webhook-authentication'
 tags: []
 context: review
 ---
 
-Mend can review changes on GitLab or GitHub with the same workflow semantics, selected per project through the `platform` config field. The [[review.flow:normalize-provider-webhook]] flow converts provider events into shared internal events, while [[review.flow:publish-provider-review]] posts review output through the provider-neutral port and respects [[review.inv:provider-draft-ownership]]. Findings with valid changed-line evidence are published as native inline review threads; findings without a valid diff anchor use the provider's general discussion fallback.
+Mend can review changes on GitLab or GitHub with the same workflow semantics, selected per project through the `platform` config field. The [[review.flow:normalize-provider-webhook]] flow authenticates provider events, with GitLab following [[review.rule:gitlab-webhook-authentication]], and converts them into shared internal events, while [[review.flow:publish-provider-review]] posts review output through the provider-neutral port and respects [[review.inv:provider-draft-ownership]]. Findings with valid changed-line evidence are published as native inline review threads; findings without a valid diff anchor use the provider's general discussion fallback.
 
 This feature includes the [[review.term:review-provider]] concept and the [[review.con:review-provider]] boundary.
