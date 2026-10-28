@@ -17,6 +17,11 @@ const envSchema = z.object({
 
 export type EnvConfig = z.infer<typeof envSchema>
 
+const defaultIntentModels = {
+  pi: 'openai-codex/gpt-6-luna',
+  codex: 'gpt-6-luna',
+} as const
+
 const triggerSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ready') }),
   z.object({ mode: z.literal('all') }),
@@ -188,7 +193,7 @@ const reviewSchema = z.object({
         .default('auto'),
       label_prefix: z.string().default('ai-review:'),
     })
-    .default({}),
+    .prefault({}),
   flags: z
     .object({
       prompt_templates_v2: z.boolean().default(true),
@@ -198,16 +203,20 @@ const reviewSchema = z.object({
       bug_history: z.boolean().default(true),
       dry_run: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   intent: z
     .object({
-      harness: z.enum(['pi', 'codex']).default('pi'),
-      model: z.string().default('anthropic/claude-sonnet-4-20250514'),
+      harness: z.enum(['pi', 'codex']).default('codex'),
+      model: z.string().optional(),
       thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('minimal'),
       timeout_ms: z.number().int().positive().default(45_000),
       failure_policy: z.enum(['mixed', 'fail']).default('mixed'),
     })
-    .default({}),
+    .transform((intent) => ({
+      ...intent,
+      model: intent.model ?? defaultIntentModels[intent.harness],
+    }))
+    .prefault({}),
   comparison: comparisonSchema,
   memory: reviewMemorySchema,
   triage: reviewTriageSchema,

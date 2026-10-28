@@ -31,7 +31,7 @@ export const postDiagnosticsSchema = z.object({
   preExistingDraftCount: z.number().int().nonnegative(),
   recoveredDraftCount: z.number().int().nonnegative(),
   draftRecoveryAction: z.enum(['none', 'reused', 'cleaned']),
-  skippedInlineReasons: z.record(z.number().int().nonnegative()),
+  skippedInlineReasons: z.record(z.string(), z.number().int().nonnegative()),
   resolvedThreadCount: z.number().int().nonnegative().default(0),
   partiallyFixedThreadCount: z.number().int().nonnegative().default(0),
   unmatchedVerdictCount: z.number().int().nonnegative().default(0),

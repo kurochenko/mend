@@ -41,30 +41,31 @@
     "bun": ">=1.3.9"
   },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "0.73.1",
-    "@mastra/core": "^1.7.0",
-    "@mastra/hono": "^1.1.6",
-    "@mastra/pg": "^1.6.1",
-    "@sinclair/typebox": "^0.34.49",
-    "dependency-cruiser": "18.0.0",
-    "drizzle-orm": "0.45.2",
-    "hono": "^4.7.4",
-    "postgres": "^3.4.5",
-    "yaml": "^2.8.2",
-    "zod": "^3.24.2"
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@mastra/core": "^1.79.0",
+    "@mastra/hono": "^1.7.21",
+    "@mastra/pg": "^1.32.0",
+    "@sinclair/typebox": "^0.34.52",
+    "dependency-cruiser": "18.7.0",
+    "drizzle-orm": "0.45.4",
+    "hono": "^4.13.14",
+    "postgres": "^3.4.9",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.16",
+    "@biomejs/biome": "^2.6.3",
     "@eslint/js": "^10.0.1",
-    "@types/bun": "1.3.14",
-    "drizzle-kit": "0.31.10",
-    "eslint": "^10.4.1",
-    "globals": "^17.6.0",
-    "knip": "^6.15.0",
-    "lefthook": "^2.1.9",
-    "mastra": "^1.3.4",
-    "oxlint": "^1.68.0",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.60.1"
+    "@types/bun": "1.4.4",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "drizzle-kit": "0.31.11",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "knip": "^6.43.0",
+    "lefthook": "^2.2.2",
+    "mastra": "^1.35.0",
+    "oxlint": "^1.90.0",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.72.1"
   }
 }

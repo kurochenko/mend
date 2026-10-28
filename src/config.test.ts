@@ -74,8 +74,27 @@ describe('parseProjectsFileConfig', () => {
     expect(config.projects.app?.review.fix.enabled).toBe(false)
     expect(config.projects.app?.review.fix.automatic).toBe(false)
     expect(config.projects.app?.review.fix.max_loops).toBe(3)
-    expect(config.projects.app?.review.intent.harness).toBe('pi')
+    expect(config.projects.app?.review.intent.harness).toBe('codex')
+    expect(config.projects.app?.review.intent.model).toBe('gpt-6-luna')
     expect(config.projects.app?.review.flags.bug_history).toBe(true)
+    expect(config.projects.app?.review.template.prompt).toBe('auto')
+    expect(config.projects.app?.review.template.label_prefix).toBe('ai-review:')
+  })
+
+  test('defaults the intent model to a Pi model id when the Pi harness is selected', () => {
+    const config = parseProjectsFileConfig({
+      projects: {
+        app: {
+          ...baseProject,
+          review: {
+            ...baseProject.review,
+            intent: { harness: 'pi' },
+          },
+        },
+      },
+    })
+
+    expect(config.projects.app?.review.intent.model).toBe('openai-codex/gpt-6-luna')
   })
 
   test('parses codex intent classifier harness', () => {

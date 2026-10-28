@@ -4,7 +4,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
-RUN bun install -g @openai/codex opencode-ai @mariozechner/pi-coding-agent
+RUN bun install -g @openai/codex opencode-ai @earendil-works/pi-coding-agent
 
 WORKDIR /app
 

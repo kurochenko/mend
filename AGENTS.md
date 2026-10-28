@@ -4,7 +4,7 @@ Autonomous agentic system for MR/PR code review. Triggered from GitLab or GitHub
 
 ## Stack
 
-Bun, TypeScript, Hono, Mastra, Codex CLI, Pi (`@mariozechner/pi-coding-agent`), OpenCode, Drizzle, Postgres, Zod, Context7
+Bun, TypeScript, Hono, Mastra, Codex CLI, Pi (`@earendil-works/pi-coding-agent`), OpenCode, Drizzle, Postgres, Zod, Context7
 
 ## Architecture
 

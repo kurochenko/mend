@@ -79,12 +79,12 @@ describe('parseLlmIntentOutput', () => {
 })
 
 describe('classifyMrIntentWithLlm', () => {
-  it('uses Pi by default-compatible configuration', async () => {
+  it('uses Pi when configured', async () => {
     const result = await classifyMrIntentWithLlm(input, {
       harness: 'pi',
       cwd: '/tmp/repo',
       sessionDir: '/tmp/sessions',
-      model: 'anthropic/claude-sonnet-4-20250514',
+      model: 'openai-codex/gpt-6-luna',
       thinkingLevel: 'minimal',
       timeoutMs: 45_000,
     })

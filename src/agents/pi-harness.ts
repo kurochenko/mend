@@ -1,13 +1,12 @@
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
-} from '@mariozechner/pi-coding-agent'
-import type { AgentSession, ToolDefinition } from '@mariozechner/pi-coding-agent'
+} from '@earendil-works/pi-coding-agent'
+import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from '@sinclair/typebox'
 import { z } from 'zod'
 import { lookupContext7 } from '@/integrations/context7'
@@ -83,11 +82,19 @@ const createReviewCustomTools = (context7ApiKey: string | null | undefined): Too
   return [createContext7Tool(context7ApiKey)]
 }
 
+export const getFinalAssistantError = (messages: AgentSession['messages']): string | undefined => {
+  const lastAssistant = messages.findLast((message) => message.role === 'assistant')
+  if (lastAssistant?.role !== 'assistant' || lastAssistant.stopReason !== 'error') {
+    return undefined
+  }
+  return lastAssistant.errorMessage ?? 'Pi assistant response ended with an error'
+}
+
 const parseModelString = (model: string): { provider: string; modelId: string } => {
   const slashIndex = model.indexOf('/')
   if (slashIndex === -1) {
     throw new Error(
-      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "anthropic/claude-sonnet-4-20250514")`,
+      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "openai-codex/gpt-6-luna")`,
     )
   }
   return {
@@ -132,12 +139,11 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const toolMode = config.toolMode ?? 'full'
 
-  const authStorage = AuthStorage.create()
-  const modelRegistry = ModelRegistry.create(authStorage)
+  const modelRuntime = await ModelRuntime.create()
   const agentDir = getAgentDir()
 
   const { provider, modelId } = parseModelString(config.model)
-  const model = modelRegistry.find(provider, modelId)
+  const model = modelRuntime.getModel(provider, modelId)
   if (!model) {
     return {
       success: false,
@@ -180,8 +186,7 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
       sessionManager,
       settingsManager,
       resourceLoader,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
     })
     session = result.session
     abortSession = () => {
@@ -206,6 +211,11 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
       `Pi review timed out after ${timeoutMs}ms`,
       config.signal,
     )
+
+    const assistantError = getFinalAssistantError(session.messages)
+    if (assistantError) {
+      return { success: false, output, sessionFile: session.sessionFile, error: assistantError }
+    }
 
     return {
       success: true,
