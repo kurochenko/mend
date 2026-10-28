@@ -202,7 +202,7 @@ const reviewSchema = z.object({
   intent: z
     .object({
       harness: z.enum(['pi', 'codex']).default('pi'),
-      model: z.string().default('anthropic/claude-sonnet-4-20250514'),
+      model: z.string().default('anthropic/claude-sonnet-5-5'),
       thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('minimal'),
       timeout_ms: z.number().int().positive().default(45_000),
       failure_policy: z.enum(['mixed', 'fail']).default('mixed'),

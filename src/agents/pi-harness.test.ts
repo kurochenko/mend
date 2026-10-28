@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { getFinalAssistantError, invokePiReview } from '@/agents/pi-harness'
+import { parseProjectsFileConfig } from '@/config'
 
 type SessionMessage = AgentSession['messages'][number]
 
@@ -84,5 +86,33 @@ describe('getFinalAssistantError', () => {
 
   it('returns undefined when there is no assistant response', () => {
     expect(getFinalAssistantError([userMessage('review')])).toBeUndefined()
+  })
+})
+
+describe('default Pi models', () => {
+  it('resolves the default intent classifier model in the Pi catalog', async () => {
+    const config = parseProjectsFileConfig({
+      projects: {
+        app: {
+          platform: 'gitlab',
+          url: 'https://gitlab.com',
+          token: 'token',
+          webhook_secret: 'secret',
+          project_id: 1,
+          repo_url: 'git@gitlab.com:org/repo.git',
+          default_branch: 'main',
+          review: { llm: { model: 'gpt-5' } },
+        },
+      },
+    })
+    const intentModel = config.projects.app?.review.intent.model ?? ''
+    const [provider = '', modelId = ''] = intentModel.split('/')
+    const modelRuntime = await ModelRuntime.create({
+      authPath: '/tmp/mend-pi-test/auth.json',
+      modelsPath: null,
+      refreshOnCreate: false,
+    })
+
+    expect(modelRuntime.getModel(provider, modelId)).toBeDefined()
   })
 })

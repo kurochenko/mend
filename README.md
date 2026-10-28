@@ -86,7 +86,7 @@ review:
     model: gpt-5.5
     thinking_level: medium
   llm:                    # intent classification etc.
-    model: anthropic/claude-sonnet-4-20250514
+    model: anthropic/claude-sonnet-5-5
     thinking_level: medium
 ```
 

@@ -94,7 +94,7 @@ const parseModelString = (model: string): { provider: string; modelId: string } 
   const slashIndex = model.indexOf('/')
   if (slashIndex === -1) {
     throw new Error(
-      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "anthropic/claude-sonnet-4-20250514")`,
+      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "anthropic/claude-sonnet-5-5")`,
     )
   }
   return {
