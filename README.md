@@ -66,7 +66,7 @@ In Docker, logins persist in the `pi-auth` / `codex-auth` / `opencode-auth` volu
 
 ## Connecting a project
 
-1. **Configure it in `mend.yml`** (see [mend.example.yml](mend.example.yml) for every option): GitLab URL, API token (scope `api`), webhook secret, project id, `repo_url`, and the trigger mode — `ready` reviews MRs when they leave draft state, `all` reviews every push. Secrets are referenced as `${VAR}` and resolved from `.env`.
+1. **Configure it in `mend.yml`** (see [mend.example.yml](mend.example.yml) for every option): GitLab URL, API token (scope `api`), webhook signing token (or secret token), project id, `repo_url`, and the trigger mode — `ready` reviews MRs when they leave draft state, `all` reviews every push. Secrets are referenced as `${VAR}` and resolved from `.env`.
 2. **Expose port 3147** to the internet however you like — reverse proxy, Tailscale funnel, or a Cloudflare tunnel (`bun run tunnel:webhooks:quick` starts an ad-hoc one for testing).
 3. **Add the webhook** in GitLab: *Project → Settings → Webhooks*.
    - URL: `https://<your-host>/webhooks/gitlab/<project-key>` (the key from `mend.yml`, e.g. `backend`)
@@ -74,6 +74,25 @@ In Docker, logins persist in the `pi-auth` / `codex-auth` / `opencode-auth` volu
    - Secret token (without a signing token): the value of your `webhook_secret`
    - Triggers: **Merge request events** and **Comments** (note events)
 4. Open an MR (or mark one ready) — Mend queues a review, posts a status note, and publishes findings when done.
+
+### Troubleshooting webhooks
+
+Every webhook request logs one `[webhook]` line (`docker compose logs -f mend`) with its outcome:
+
+```
+[webhook] "missing" "Merge Request Hook" 404 unknown project
+[webhook] backend "Merge Request Hook" 401 unauthorized
+[webhook] backend "Push Hook" 400 invalid payload
+[webhook] backend "Merge Request Hook" 200 ignored MR !42: action "update", draft=true
+[webhook] review requested: https://gitlab.com/org/backend/-/merge_requests/42 (backend)
+```
+
+- `404` — the last URL segment doesn't match a project key in `mend.yml`.
+- `401` — the signing token or secret token doesn't match `.env`; restart Mend after editing it.
+- `400 invalid payload` — an event kind Mend doesn't handle (e.g. push events); only enable merge request and comment events.
+- `ignored` — the request was valid but doesn't trigger a review; the reason says why (draft MR, closed MR, …).
+
+No line at all means the request never reached Mend: check GitLab's *Settings → Webhooks → Recent events* for the delivery error, then DNS, firewall, and the reverse proxy.
 
 ## Choosing harness and model
 

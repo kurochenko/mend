@@ -3,8 +3,8 @@ projects:
     platform: gitlab
     url: https://gitlab.com
     token: ${BACKEND_GITLAB_TOKEN}
-    webhook_secret: ${BACKEND_WEBHOOK_SECRET}
-    # webhook_signing_token: ${BACKEND_WEBHOOK_SIGNING_TOKEN}  # replaces webhook_secret when set
+    webhook_signing_token: ${BACKEND_WEBHOOK_SIGNING_TOKEN}
+    # webhook_secret: ${BACKEND_WEBHOOK_SECRET}  # only needed without a signing token
     project_id: 123
     repo_url: git@gitlab.com:org/backend.git
     default_branch: main
