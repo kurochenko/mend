@@ -60,7 +60,7 @@ const addFinding = (severity: Finding['severity'], message: string): void => {
 }
 
 const forbiddenFiles = [
-  /^\.env(?:\.|$)/,
+  /^\.env(?!\.example$)(?:\.|$)/,
   /^sessions\//,
   /^workspaces\//,
   /^logs\//,
