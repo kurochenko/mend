@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, GitLabProjectConfig } from '@/config'
 import {
@@ -338,5 +338,89 @@ describe('gitlab webhook route authentication', () => {
     const res = await post({ 'X-Gitlab-Token': 'wrong' })
 
     expect(res.status).toBe(401)
+  })
+})
+
+describe('gitlab webhook route logging', () => {
+  let logSpy: ReturnType<typeof spyOn<Console, 'log'>>
+
+  beforeEach(() => {
+    logSpy = spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  const post = (
+    body: string,
+    headers: Record<string, string> = { 'X-Gitlab-Token': 'secret' },
+    projectKey = 'test-project',
+  ) => {
+    const project = makeProject()
+    return createGitlabWebhookRoute(
+      { projects: new Map([[project.key, project]]), env: {} } as unknown as AppConfig,
+      {} as Mastra,
+    ).request(`/${projectKey}`, {
+      method: 'POST',
+      headers: { 'X-Gitlab-Event': 'Merge Request Hook', ...headers },
+      body,
+    })
+  }
+
+  const loggedLines = () => logSpy.mock.calls.map((call) => String(call[0]))
+
+  test('logs an unknown project', async () => {
+    const res = await post('{}', undefined, 'missing')
+
+    expect(res.status).toBe(404)
+    expect(loggedLines()).toEqual(['[webhook] "missing" "Merge Request Hook" 404 unknown project'])
+  })
+
+  test('logs an unauthorized request without the token', async () => {
+    const res = await post(JSON.stringify(makeMrPayload()), { 'X-Gitlab-Token': 'wrong-token' })
+
+    expect(res.status).toBe(401)
+    expect(loggedLines()).toEqual(['[webhook] test-project "Merge Request Hook" 401 unauthorized'])
+    expect(loggedLines().join('\n')).not.toContain('wrong-token')
+  })
+
+  test('logs a body that is not JSON', async () => {
+    const res = await post('not json')
+
+    expect(res.status).toBe(400)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 400 invalid payload',
+    ])
+  })
+
+  test('logs an unsupported payload without its body', async () => {
+    const res = await post(JSON.stringify({ object_kind: 'push', ref: 'refs/heads/private' }))
+
+    expect(res.status).toBe(400)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 400 invalid payload',
+    ])
+  })
+
+  test('logs an ignored merge request with its IID and reason', async () => {
+    const res = await post(JSON.stringify(makeMrPayload({ action: 'update', draft: true })))
+
+    expect(res.status).toBe(200)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 200 ignored MR !42: action "update", draft=true',
+    ])
+  })
+
+  test('logs an ignored note without an MR IID', async () => {
+    const res = await post(
+      JSON.stringify(makeNotePayload({ noteableType: 'Issue', hasMr: false })),
+      { 'X-Gitlab-Token': 'secret', 'X-Gitlab-Event': 'Note Hook' },
+    )
+
+    expect(res.status).toBe(200)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Note Hook" 200 ignored: note not on a merge request',
+    ])
   })
 })

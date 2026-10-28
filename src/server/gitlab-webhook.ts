@@ -293,22 +293,46 @@ const isAuthorizedWebhook = (
   )
 }
 
+const logWebhookOutcome = (
+  projectKey: string,
+  gitlabEvent: string | undefined,
+  outcome: string,
+): void => {
+  console.log(`[webhook] ${projectKey} ${JSON.stringify(gitlabEvent ?? '')} ${outcome}`)
+}
+
+const payloadMrIid = (payload: WebhookPayload): number | undefined =>
+  payload.object_kind === 'merge_request'
+    ? payload.object_attributes.iid
+    : payload.merge_request?.iid
+
+const logIgnoredWebhook = (
+  projectKey: string,
+  gitlabEvent: string | undefined,
+  payload: WebhookPayload,
+  reason: string,
+): void => {
+  const mrIid = payloadMrIid(payload)
+  const mrLabel = mrIid === undefined ? '' : ` MR !${mrIid}`
+  logWebhookOutcome(projectKey, gitlabEvent, `200 ignored${mrLabel}: ${reason}`)
+}
+
 export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
   const { projects } = config
   const app = new Hono()
 
   app.post('/:projectKey', async (c) => {
     const projectKey = c.req.param('projectKey')
+    const gitlabEvent = c.req.header('X-Gitlab-Event')
     const project = projects.get(projectKey)
-    if (!project) {
-      return c.json({ error: 'unknown project' }, 404)
-    }
-    if (project.platform !== 'gitlab') {
+    if (project?.platform !== 'gitlab') {
+      logWebhookOutcome(JSON.stringify(projectKey), gitlabEvent, '404 unknown project')
       return c.json({ error: 'unknown project' }, 404)
     }
 
     const rawBody = await c.req.text()
     if (!isAuthorizedWebhook(project, (name) => c.req.header(name), rawBody)) {
+      logWebhookOutcome(projectKey, gitlabEvent, '401 unauthorized')
       return c.json({ error: 'unauthorized' }, 401)
     }
 
@@ -316,10 +340,12 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
     try {
       raw = JSON.parse(rawBody)
     } catch {
+      logWebhookOutcome(projectKey, gitlabEvent, '400 invalid payload')
       return c.json({ error: 'invalid payload' }, 400)
     }
     const parseResult = webhookPayloadSchema.safeParse(raw)
     if (!parseResult.success) {
+      logWebhookOutcome(projectKey, gitlabEvent, '400 invalid payload')
       return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
     }
     const payload = parseResult.data
@@ -330,7 +356,9 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
 
     const event = classifyWebhook(project, payload)
 
-    if (event.type === 'mr_review_requested') {
+    if (event.type === 'ignored') {
+      logIgnoredWebhook(projectKey, gitlabEvent, payload, event.reason)
+    } else if (event.type === 'mr_review_requested') {
       console.log(`[webhook] review requested: ${event.url} (${event.projectKey})`)
       enqueueMrReview({
         mastra,
@@ -341,17 +369,17 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
         console.error(`[webhook] queue failure for ${event.projectKey} MR !${event.mrIid}:`, err),
       )
     } else if (event.type === 'mr_note_received') {
+      if (payload.object_kind !== 'note') {
+        logWebhookOutcome(projectKey, gitlabEvent, '400 invalid note payload')
+        return c.json({ error: 'invalid note payload' }, 400)
+      }
       console.log(
         `[webhook] note received for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}`,
       )
-      const notePayload = payload.object_kind === 'note' ? payload : null
-      if (!notePayload) {
-        return c.json({ error: 'invalid note payload' }, 400)
-      }
       processReviewNoteEvent({
         project,
         mastra,
-        payload: notePayload,
+        payload,
       }).catch((err: unknown) =>
         console.error(
           `[webhook] note processing failure for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}:`,
