@@ -60,15 +60,15 @@ change; leave endpoint and patch details to the MR body. Examples from history:
 
 ## Merge requests
 
-Use the `glab-personal` alias through an interactive zsh so it resolves:
+Use the GitLab CLI (`glab`):
 
 1. Check for an existing MR first:
-   `zsh -ic 'glab-personal mr list --source-branch <branch>'`.
+   `glab mr list --source-branch <branch>`.
 2. Write the description as real multiline Markdown to a file or here-doc; never
    pass escaped `\n` text. Preview the exact title and description before sending.
 3. Create with explicit branches:
-   `zsh -ic 'glab-personal mr create --source-branch <branch> --target-branch main --title "<title>" --description "$(cat /tmp/mr-description.md)"'`.
-4. Verify with `zsh -ic 'glab-personal mr view <iid>'`: target branch, title,
+   `glab mr create --source-branch <branch> --target-branch main --title "<title>" --description "$(cat /tmp/mr-description.md)"`.
+4. Verify with `glab mr view <iid>`: target branch, title,
    description rendering, and latest head SHA.
 
 The description covers the behavior change, user or system value, and durable
