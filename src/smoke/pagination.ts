@@ -12,4 +12,4 @@ export const paginate = <T>(items: T[], page: number, pageSize: number): Page<T>
   }
 }
 
-export const totalPages = (count: number, pageSize: number): number => Math.floor(count / pageSize)
+export const totalPages = (count: number, pageSize: number): number => Math.ceil(count / pageSize)
