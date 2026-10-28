@@ -310,10 +310,19 @@ describe('gitlab webhook route authentication', () => {
     expect(res.status).toBe(401)
   })
 
-  test('falls back to the secret token when no signature header is sent', async () => {
+  test('rejects a stripped signature even with a valid secret token', async () => {
     const res = await post(
       { 'X-Gitlab-Token': 'secret' },
       makeProject({ webhook_signing_token: signingToken }),
+    )
+
+    expect(res.status).toBe(401)
+  })
+
+  test('accepts a valid signature when no secret token is configured', async () => {
+    const res = await post(
+      signedHeaders(nowTimestamp()),
+      makeProject({ webhook_secret: undefined, webhook_signing_token: signingToken }),
     )
 
     expect(res.status).toBe(200)

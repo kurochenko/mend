@@ -1,8 +1,9 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac } from 'node:crypto'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, GitHubProjectConfig } from '@/config'
+import { constantTimeEquals } from '@/lib/constant-time'
 import { enqueueMrReview } from '@/server/mr-review-queue'
 import { processReviewNoteEvent } from '@/server/review-note-events'
 import type { ReviewNoteEventPayload, ReviewWebhookEvent } from '@/server/webhook-events'
@@ -80,11 +81,7 @@ export const verifyGithubSignature = (
   }
 
   const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`
-  const actualBuffer = Buffer.from(signature)
-  const expectedBuffer = Buffer.from(expected)
-  return (
-    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
-  )
+  return constantTimeEquals(signature, expected)
 }
 
 const findProject = (

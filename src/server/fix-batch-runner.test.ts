@@ -278,6 +278,7 @@ describe('assertFixSourceRepository', () => {
       ...makeProject(),
       platform: 'github' as const,
       url: 'https://github.com',
+      webhook_secret: 'secret',
       repo: 'org/repo',
       repo_url: 'git@github.com:org/repo.git',
     }

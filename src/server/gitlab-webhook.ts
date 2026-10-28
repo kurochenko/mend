@@ -1,10 +1,11 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, GitLabProjectConfig } from '@/config'
+import { constantTimeEquals } from '@/lib/constant-time'
 import { enqueueMrReview } from '@/server/mr-review-queue'
 import { processReviewNoteEvent } from '@/server/review-note-events'
 import type { ReviewWebhookEvent } from '@/server/webhook-events'
@@ -229,14 +230,6 @@ export const classifyWebhook = (
   }
 }
 
-const constantTimeEquals = (actual: string, expected: string): boolean => {
-  const actualBuffer = Buffer.from(actual)
-  const expectedBuffer = Buffer.from(expected)
-  return (
-    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
-  )
-}
-
 interface GitlabSignatureInput {
   signingToken: string
   messageId: string | undefined
@@ -281,20 +274,23 @@ const isAuthorizedWebhook = (
   header: (name: string) => string | undefined,
   rawBody: string,
 ): boolean => {
-  const signatures = header('webhook-signature')
-  if (project.webhook_signing_token && signatures) {
+  if (project.webhook_signing_token) {
     return verifyGitlabSignature({
       signingToken: project.webhook_signing_token,
       messageId: header('webhook-id'),
       timestamp: header('webhook-timestamp'),
-      signatures,
+      signatures: header('webhook-signature'),
       rawBody,
       nowSeconds: Math.floor(Date.now() / 1000),
     })
   }
 
   const token = header('X-Gitlab-Token')
-  return token !== undefined && constantTimeEquals(token, project.webhook_secret)
+  return (
+    token !== undefined &&
+    project.webhook_secret !== undefined &&
+    constantTimeEquals(token, project.webhook_secret)
+  )
 }
 
 export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
