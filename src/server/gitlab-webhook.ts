@@ -163,7 +163,7 @@ const classifyMrEvent = (
   const { object_attributes: mr, changes } = payload
 
   if (mr.state !== 'opened') {
-    return { type: 'ignored', reason: `mr state is "${mr.state}"` }
+    return { type: 'ignored', reason: `mr state is ${JSON.stringify(mr.state)}` }
   }
 
   const trigger = project.trigger
@@ -176,7 +176,7 @@ const classifyMrEvent = (
       changes?.draft?.current === false
 
     if (!isOpenedAndReady && !isDraftToReady) {
-      return { type: 'ignored', reason: `action "${mr.action}", draft=${mr.draft}` }
+      return { type: 'ignored', reason: `action ${JSON.stringify(mr.action)}, draft=${mr.draft}` }
     }
   } else if (trigger.mode === 'label') {
     return { type: 'ignored', reason: 'label trigger not yet implemented' }
@@ -320,6 +320,16 @@ const logIgnoredWebhook = (
 export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
   const { projects } = config
   const app = new Hono()
+
+  app.onError((err, c) => {
+    logWebhookOutcome(
+      c.req.param('projectKey') ?? '',
+      c.req.header('X-Gitlab-Event'),
+      '500 internal error',
+    )
+    console.error('[webhook] request failed:', err)
+    return c.json({ error: 'internal error' }, 500)
+  })
 
   app.post('/:projectKey', async (c) => {
     const projectKey = c.req.param('projectKey')

@@ -77,7 +77,7 @@ In Docker, logins persist in the `pi-auth` / `codex-auth` / `opencode-auth` volu
 
 ### Troubleshooting webhooks
 
-Every webhook request logs one `[webhook]` line (`docker compose logs -f mend`) with its outcome:
+Every webhook request logs one `[webhook]` outcome line (`docker compose logs -f mend`); with `RECORD_WEBHOOKS=1`, recorded payloads add a separate `recorded payload` line:
 
 ```
 [webhook] "missing" "Merge Request Hook" 404 unknown project
@@ -91,6 +91,7 @@ Every webhook request logs one `[webhook]` line (`docker compose logs -f mend`) 
 - `401` — the signing token or secret token doesn't match `.env`; restart Mend after editing it.
 - `400 invalid payload` — an event kind Mend doesn't handle (e.g. push events); only enable merge request and comment events.
 - `ignored` — the request was valid but doesn't trigger a review; the reason says why (draft MR, closed MR, …).
+- `500 internal error` — Mend failed while handling the request; the stack trace follows on the next line.
 
 No line at all means the request never reached Mend: check GitLab's *Settings → Webhooks → Recent events* for the delivery error, then DNS, firewall, and the reverse proxy.
 

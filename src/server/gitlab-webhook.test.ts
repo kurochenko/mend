@@ -356,8 +356,8 @@ describe('gitlab webhook route logging', () => {
     body: string,
     headers: Record<string, string> = { 'X-Gitlab-Token': 'secret' },
     projectKey = 'test-project',
+    project = makeProject(),
   ) => {
-    const project = makeProject()
     return createGitlabWebhookRoute(
       { projects: new Map([[project.key, project]]), env: {} } as unknown as AppConfig,
       {} as Mastra,
@@ -369,6 +369,29 @@ describe('gitlab webhook route logging', () => {
   }
 
   const loggedLines = () => logSpy.mock.calls.map((call) => String(call[0]))
+
+  test('escapes payload values in an ignored reason', async () => {
+    const res = await post(JSON.stringify(makeMrPayload({ action: 'update\n[webhook] forged' })))
+
+    expect(res.status).toBe(200)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 200 ignored MR !42: action "update\\n[webhook] forged", draft=false',
+    ])
+  })
+
+  test('logs a request that fails while being handled', async () => {
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    const project = makeProject({ trigger: undefined as unknown as GitLabProjectConfig['trigger'] })
+
+    const res = await post(JSON.stringify(makeMrPayload()), undefined, 'test-project', project)
+
+    expect(res.status).toBe(500)
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 500 internal error',
+    ])
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    errorSpy.mockRestore()
+  })
 
   test('logs an unknown project', async () => {
     const res = await post('{}', undefined, 'missing')
