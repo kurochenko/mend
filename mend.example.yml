@@ -15,7 +15,7 @@ projects:
         # api_key: ${CONTEXT7_API_KEY}
     review:
       llm:
-        model: anthropic/claude-sonnet-5-5
+        model: openai-codex/gpt-6-luna
         thinking_level: medium
       # agent:
       #   harness: pi # pi, codex, opencode, or ensemble
@@ -45,8 +45,8 @@ projects:
         structured_findings_post: true
         structural_signals: true
       intent:
-        harness: pi # pi or codex
-        model: anthropic/claude-sonnet-5-5
+        harness: codex # pi or codex
+        model: gpt-6-luna
         thinking_level: minimal
         timeout_ms: 45000
         failure_policy: mixed
@@ -56,7 +56,7 @@ projects:
       # comparison:
       #   enabled: false
       #   harness: opencode # pi, codex, opencode, or ensemble
-      #   model: anthropic/claude-sonnet-5-5
+      #   model: openai/gpt-6-luna
       #   thinking_level: medium
       #   timeout_ms: 300000
       # fix:
@@ -104,7 +104,7 @@ projects:
   #       api_key: ${CONTEXT7_API_KEY}
   #   review:
   #     llm:
-  #       model: anthropic/claude-sonnet-5-5
+  #       model: openai-codex/gpt-6-luna
   #       thinking_level: high
   #     template:
   #       prompt: auto
@@ -115,8 +115,8 @@ projects:
   #       structured_findings_post: true
   #       structural_signals: true
   #     intent:
-  #       harness: pi
-  #       model: anthropic/claude-sonnet-5-5
+  #       harness: codex
+  #       model: gpt-6-luna
   #       thinking_level: minimal
   #       timeout_ms: 45000
   #       failure_policy: mixed
@@ -138,7 +138,7 @@ projects:
   #       api_key: ${CONTEXT7_API_KEY}
   #   review:
   #     llm:
-  #       model: anthropic/claude-sonnet-5-5
+  #       model: openai-codex/gpt-6-luna
   #       thinking_level: medium
   #     template:
   #       prompt: auto
@@ -149,8 +149,8 @@ projects:
   #       structured_findings_post: true
   #       structural_signals: true
   #     intent:
-  #       harness: pi
-  #       model: anthropic/claude-sonnet-5-5
+  #       harness: codex
+  #       model: gpt-6-luna
   #       thinking_level: minimal
   #       timeout_ms: 45000
   #       failure_policy: mixed

@@ -85,8 +85,8 @@ review:
     harness: codex        # pi | codex | opencode | ensemble
     model: gpt-5.5
     thinking_level: medium
-  llm:                    # intent classification etc.
-    model: anthropic/claude-sonnet-5-5
+  llm:                    # Pi model for thread replies and fallbacks
+    model: openai-codex/gpt-6-luna
     thinking_level: medium
 ```
 

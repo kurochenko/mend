@@ -94,7 +94,7 @@ const parseModelString = (model: string): { provider: string; modelId: string } 
   const slashIndex = model.indexOf('/')
   if (slashIndex === -1) {
     throw new Error(
-      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "anthropic/claude-sonnet-5-5")`,
+      `Invalid model string "${model}". Expected "provider/modelId" (e.g. "openai-codex/gpt-6-luna")`,
     )
   }
   return {

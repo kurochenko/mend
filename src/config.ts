@@ -201,8 +201,8 @@ const reviewSchema = z.object({
     .prefault({}),
   intent: z
     .object({
-      harness: z.enum(['pi', 'codex']).default('pi'),
-      model: z.string().default('anthropic/claude-sonnet-5-5'),
+      harness: z.enum(['pi', 'codex']).default('codex'),
+      model: z.string().default('gpt-6-luna'),
       thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('minimal'),
       timeout_ms: z.number().int().positive().default(45_000),
       failure_policy: z.enum(['mixed', 'fail']).default('mixed'),
