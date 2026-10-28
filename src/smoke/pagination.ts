@@ -7,7 +7,7 @@ export const paginate = <T>(items: T[], page: number, pageSize: number): Page<T>
   const start = page * pageSize
   const end = start + pageSize
   return {
-    items: items.slice(start, end - 1),
+    items: items.slice(start, end),
     hasMore: end < items.length,
   }
 }
