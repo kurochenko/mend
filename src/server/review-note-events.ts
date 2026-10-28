@@ -1,6 +1,4 @@
 import type { ProjectConfig } from '@/config'
-import type { Mastra } from '@mastra/core'
-import { getReviewFindingByThreadId, updateReviewFindingState } from '@/db/review-findings'
 import {
   archiveActiveMemoryForThread,
   createReviewMemoryEntry,
@@ -25,11 +23,7 @@ import { createReviewProvider, type ReviewProvider } from '@/integrations/provid
 import type { ProviderThread, ProviderThreadMessage } from '@/integrations/provider/types'
 import { postStepOutputSchema } from '@/mastra/review/run-result'
 import { buildReviewConversationPlan, mentionsBot } from '@/server/review-conversation'
-import { requestAcceptedFixBatch } from '@/server/fix-batch-queue'
-import { ensureFixBatchRunner } from '@/server/fix-batch-runner'
-import { enqueueMrReview } from '@/server/mr-review-queue'
 import { generateThreadReply } from '@/server/review-thread-reply'
-import { parseReviewTriageCommand, type ReviewTriageCommand } from '@/server/review-triage-commands'
 import { isNoteAddressedToMend, type IsNoteAddressedToMendParams } from '@/server/note-addressing'
 import {
   parseReviewConversationMarker,
@@ -39,8 +33,7 @@ import {
 import { parseMendMarkers } from '@/mastra/review/markers'
 import { normalizeReviewMessageBody } from '@/lib/review-threads'
 import { parseProviderTimestamp } from '@/lib/timestamps'
-import type { ReviewFindingState } from '@/db/schema'
-import type { ReviewNoteEventPayload } from '@/server/webhook-events'
+import type { ReviewNote } from '@/server/webhook-events'
 import {
   markProviderThreadResolved,
   upsertProviderThread,
@@ -249,193 +242,32 @@ const hasExistingLocalReply = (threadMessages: ReviewMessageRecord[], body: stri
       normalizeForIdempotencyCheck(message.body) === normalizeForIdempotencyCheck(body),
   )
 
-const triageStateForCommand = (
-  command: ReviewTriageCommand,
-): { state: ReviewFindingState; reason: string | null } | null => {
-  switch (command.kind) {
-    case 'accept':
-      return { state: 'accepted', reason: null }
-    case 'reject':
-      return { state: 'rejected', reason: command.reason }
-    case 'defer':
-      return { state: 'deferred', reason: command.reason }
-    case 'fix_accepted':
-    case 'invalid_defer':
-      return null
-  }
-}
-
-const triageResolutionReplyBody = (
-  state: Extract<ReviewFindingState, 'rejected' | 'deferred'>,
-  reason: string,
-): string => {
-  switch (state) {
-    case 'rejected':
-      return `Marked as rejected: ${reason}`
-    case 'deferred':
-      return `Deferred: ${reason}`
-  }
-}
-
-const replyAndResolveTriageThread = async (params: {
-  provider: ReviewProvider
-  mrIid: number
-  thread: ReviewThreadRecord
-  state: Extract<ReviewFindingState, 'rejected' | 'deferred'>
-  reason: string
-}): Promise<void> => {
-  const reply = await params.provider.replyToThread(
-    params.mrIid,
-    params.thread.providerThreadId,
-    triageResolutionReplyBody(params.state, params.reason),
-  )
-
-  await persistOutboundReply({
-    thread: params.thread,
-    reviewRunId: params.thread.reviewRunId,
-    reply,
-    dependencies: getThreadSyncDependencies(),
-  })
-
-  const providerResolved = await params.provider.resolveThread(
-    params.mrIid,
-    params.thread.providerThreadId,
-  )
-  if (providerResolved) {
-    await markProviderThreadResolved({
-      provider: params.provider.kind,
-      providerThreadId: params.thread.providerThreadId,
-      dependencies: getThreadSyncDependencies(),
-    })
-  }
-}
-
-const applyReviewTriageCommand = async (params: {
-  project: ProjectConfig
-  provider: ReviewProvider
-  mastra?: Mastra
-  body: string
-  botUsername: string
-  projectKey: string
-  mrIid: number
-  fixLoopEnabled: boolean
-  noteId: number
-  thread: ReviewThreadRecord
-  user: { id: number; username: string }
-}): Promise<{ handled: boolean; acknowledged: boolean }> => {
-  const command = parseReviewTriageCommand(params.body, params.botUsername)
-  if (!command) {
-    return { handled: false, acknowledged: false }
-  }
-
-  const trustedUsers = params.project.review.triage.trusted_usernames
-  if (trustedUsers.length > 0 && !trustedUsers.includes(params.user.username)) {
-    await params.provider.replyToThread(
-      params.mrIid,
-      params.thread.providerThreadId,
-      `Mend ignored this command because ${params.user.username} is not configured as a trusted triage user.`,
-    )
-    return { handled: true, acknowledged: false }
-  }
-
-  if (command.kind === 'fix_accepted') {
-    const outcome = await requestAcceptedFixBatch({
-      projectKey: params.projectKey,
-      mrIid: params.mrIid,
-      enabled: params.fixLoopEnabled,
-      force: command.force,
-      requestNoteId: `${params.noteId}`,
-      requestThreadId: params.thread.id,
-      requestedByExternalId: `${params.user.id}`,
-      requestedByName: params.user.username,
-    })
-    if (outcome.status === 'refused') {
-      const reason =
-        outcome.reason === 'fix_loop_disabled'
-          ? 'The fix loop is disabled for this project.'
-          : outcome.reason === 'no_accepted_findings'
-            ? 'No accepted findings are ready to fix.'
-            : `There are ${outcome.pendingCount} pending finding(s). Reply to each finding first, or use @mend fix accepted anyway.`
-      await params.provider.replyToThread(params.mrIid, params.thread.providerThreadId, reason)
-    } else if (outcome.status === 'queued' && params.mastra) {
-      await ensureFixBatchRunner({
-        mastra: params.mastra,
-        project: params.project,
-        mrIid: params.mrIid,
-        dependencies: { enqueueMrReview },
-      })
-    }
-    return { handled: true, acknowledged: outcome.status !== 'refused' }
-  }
-
-  const target = triageStateForCommand(command)
-  if (!target) {
-    return { handled: true, acknowledged: false }
-  }
-
-  const finding = await getReviewFindingByThreadId(params.thread.id)
-  if (!finding) {
-    return { handled: true, acknowledged: false }
-  }
-
-  if (finding.state !== target.state || finding.decisionReason !== target.reason) {
-    await updateReviewFindingState({
-      id: finding.id,
-      state: target.state,
-      decisionReason: target.reason,
-      decidedByExternalId: `${params.user.id}`,
-      decidedByName: params.user.username,
-    })
-  }
-
-  if (target.state === 'rejected' || target.state === 'deferred') {
-    await replyAndResolveTriageThread({
-      provider: params.provider,
-      mrIid: params.mrIid,
-      thread: params.thread,
-      state: target.state,
-      reason: target.reason ?? 'Human triage.',
-    })
-  }
-
-  return { handled: true, acknowledged: true }
-}
-
 export type { IsNoteAddressedToMendParams }
 export { isNoteAddressedToMend }
 
 export const processReviewNoteEvent = async (params: {
   project: ProjectConfig
-  mastra?: Mastra
-  payload: ReviewNoteEventPayload
+  note: ReviewNote
+  rawPayload: unknown
 }): Promise<void> => {
-  const { project, payload } = params
+  const { project, note } = params
+  if (project.review.flags.dry_run) {
+    console.log(
+      `[notes] dry run: ignoring note ${note.noteId} on ${project.key} MR !${note.mrIid} without provider writes`,
+    )
+    return
+  }
   const provider = createReviewProvider(project)
 
-  if (
-    payload.object_attributes.noteable_type !== 'MergeRequest' ||
-    !payload.merge_request ||
-    payload.object_attributes.system
-  ) {
-    return
-  }
-
   const currentUser = await provider.fetchCurrentUser()
-  if (payload.user.id === currentUser.id) {
+  if (note.author.id === currentUser.id) {
     return
   }
 
-  const mrIid = payload.merge_request.iid
-  const noteId = payload.object_attributes.id
-  const noteAction = payload.object_attributes.action ?? 'create'
-  const webhookDiscussionId = payload.object_attributes.discussion_id ?? undefined
-  const hasThreadContext =
-    webhookDiscussionId !== undefined || payload.object_attributes.type === 'DiffNote'
-  const directMention = mentionsBot(payload.object_attributes.note, currentUser.username)
-
-  if (noteAction !== 'create') {
-    return
-  }
+  const { mrIid, noteId } = note
+  const webhookDiscussionId = note.discussionId
+  const hasThreadContext = webhookDiscussionId !== undefined || note.isDiffNote
+  const directMention = mentionsBot(note.body, currentUser.username)
 
   let discussionId: string
   let discussion: ProviderThread | null = null
@@ -530,16 +362,16 @@ export const processReviewNoteEvent = async (params: {
     provider: project.platform,
     reviewRunId: thread.reviewRunId ?? latestReview?.reviewRunId ?? null,
     authorType: 'human',
-    authorExternalId: `${payload.user.id}`,
-    authorName: payload.user.username,
+    authorExternalId: `${note.author.id}`,
+    authorName: note.author.username,
     direction: 'inbound',
-    body: payload.object_attributes.note,
+    body: note.body,
     providerMessageId: `${noteId}`,
     providerParentMessageId: null,
-    providerUrl: payload.object_attributes.url ?? null,
-    rawProviderData: payload,
-    providerCreatedAt: parseProviderTimestamp(payload.object_attributes.created_at),
-    providerUpdatedAt: parseProviderTimestamp(payload.object_attributes.updated_at),
+    providerUrl: note.url ?? null,
+    rawProviderData: params.rawPayload,
+    providerCreatedAt: parseProviderTimestamp(note.createdAt),
+    providerUpdatedAt: parseProviderTimestamp(note.updatedAt),
   })
 
   let inboundMessage = createdMessage
@@ -573,36 +405,6 @@ export const processReviewNoteEvent = async (params: {
       console.warn(`[notes] failed to add eyes reaction to note ${noteId}: ${error}`)
     })
 
-    const triageResult = await applyReviewTriageCommand({
-      project,
-      provider,
-      mastra: params.mastra,
-      body: payload.object_attributes.note,
-      botUsername: currentUser.username,
-      projectKey: project.key,
-      mrIid,
-      fixLoopEnabled: project.review.fix.enabled,
-      noteId,
-      thread,
-      user: payload.user,
-    })
-    if (triageResult.handled) {
-      if (triageResult.acknowledged) {
-        await addReaction({
-          provider,
-          mrIid,
-          noteId,
-          name: 'white_check_mark',
-          hasThreadContext,
-        }).catch((error) => {
-          console.warn(`[notes] failed to add success reaction to note ${noteId}: ${error}`)
-        })
-      }
-
-      await completeReviewMessageProcessing(inboundMessage.id)
-      return
-    }
-
     const lastAgentMessage = [...threadMessages]
       .reverse()
       .find((message) => message.authorType === 'agent')
@@ -621,10 +423,10 @@ export const processReviewNoteEvent = async (params: {
         : null
 
     const plan = buildReviewConversationPlan({
-      noteBody: payload.object_attributes.note,
+      noteBody: note.body,
       botUsername: currentUser.username,
       trustedForProjectMemory: project.review.memory.project_scope_usernames.includes(
-        payload.user.username,
+        note.author.username,
       ),
       pendingMarker,
       thread: {
@@ -690,7 +492,7 @@ export const processReviewNoteEvent = async (params: {
             line: thread.line,
             originalFinding: originalAgentBodyText ?? '',
             threadMessages: threadHistory,
-            userQuestion: stripAllMendMarkers(payload.object_attributes.note),
+            userQuestion: stripAllMendMarkers(note.body),
           })
         }
       } catch (error) {
@@ -729,11 +531,10 @@ export const processReviewNoteEvent = async (params: {
           matchCategory: plan.memory.matchCategory ?? null,
           metadata: {
             ...(plan.memory.metadata ?? {}),
-            sourceBody:
-              originalAgentBodyText ?? stripAllMendMarkers(payload.object_attributes.note),
+            sourceBody: originalAgentBodyText ?? stripAllMendMarkers(note.body),
           },
-          createdByExternalId: `${payload.user.id}`,
-          createdByName: payload.user.username,
+          createdByExternalId: `${note.author.id}`,
+          createdByName: note.author.username,
         })
         memoryEntryId = memoryEntry.id
         await createReviewMemoryEvent({
@@ -802,5 +603,3 @@ export const processReviewNoteEvent = async (params: {
     throw error
   }
 }
-
-export const processGitlabMergeRequestNote = processReviewNoteEvent

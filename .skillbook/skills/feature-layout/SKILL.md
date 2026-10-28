@@ -24,7 +24,7 @@ src/server (webhook, queue, notes)
 ## Folder Shape
 
 - `src/server/`: Hono routes, webhook intake and neutral events (`webhook-events.ts`), review
-  and fix queues, status notes, thread replies, triage commands, dashboards.
+  queue, status notes, thread replies, dashboards.
 - `src/mastra/workflows/`: workflow graph definitions. `src/mastra/steps/`: setup, review,
   and post orchestration.
 - `src/mastra/review/`: review domain: intents, templates, prompts, schemas, context

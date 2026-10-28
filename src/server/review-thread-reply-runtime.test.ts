@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import * as actualPiHarnessModule from '@/agents/pi-harness'
 import type { ProjectConfig } from '@/config'
+import * as actualRepoModule from '@/integrations/repo'
+
+const actualPiHarness = { ...actualPiHarnessModule }
+const actualRepo = { ...actualRepoModule }
 
 const mockEnsureClone = mock(() => Promise.resolve('/tmp/clone'))
 const mockCreateWorktree = mock<(...args: unknown[]) => Promise<string>>(() =>
@@ -20,6 +25,11 @@ mock.module('@/agents/pi-harness', () => ({
   invokePiReview: mockInvokePiReview,
 }))
 
+afterAll(() => {
+  mock.module('@/integrations/repo', () => actualRepo)
+  mock.module('@/agents/pi-harness', () => actualPiHarness)
+})
+
 const { generateThreadReply } = await import('@/server/review-thread-reply')
 
 const makeProject = (): ProjectConfig => ({
@@ -36,26 +46,14 @@ const makeProject = (): ProjectConfig => ({
   review: {
     llm: { model: 'test-model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'test-model',
-      thinking_level: 'minimal',
-      timeout_ms: 45000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
   },
   tools: { context7: {} },
 })

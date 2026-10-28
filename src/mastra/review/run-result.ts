@@ -6,7 +6,7 @@ import {
   reviewInlineCommentSchema,
   reviewOutputV2Schema,
 } from '@/mastra/review/schema'
-import { intentMetadataSchema, stepPassthroughSchema } from '@/mastra/review/step-schemas'
+import { stepPassthroughSchema } from '@/mastra/review/step-schemas'
 import { reviewModeContextSchema } from '@/lib/review-run-input'
 
 export const activeReviewMemoryEntrySchema = z.object({
@@ -38,10 +38,6 @@ export const postDiagnosticsSchema = z.object({
   persistedFindingCount: z.number().int().nonnegative().default(0),
   dedupedExistingThreadCount: z.number().int().nonnegative().default(0),
   suppressedResolvedThreadCount: z.number().int().nonnegative().default(0),
-  automaticFixBatchStatus: z
-    .enum(['disabled', 'no_findings', 'duplicate', 'loop_limit', 'queued'])
-    .nullable()
-    .default(null),
 })
 
 export const postedThreadRefSchema = z.object({
@@ -62,7 +58,6 @@ export const threadedInlineCommentSchema = reviewInlineCommentSchema.extend({
 export const postStepInputSchema = reviewOutputV2Schema
   .merge(stepPassthroughSchema)
   .merge(reviewModeContextSchema)
-  .merge(intentMetadataSchema)
   .extend({
     featureFlags: featureFlagsSchema,
     reviewDiagnostics: reviewDiagnosticsSchema,

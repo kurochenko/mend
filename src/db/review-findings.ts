@@ -1,4 +1,4 @@
-import { and, count, eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import type { InferSelectModel } from 'drizzle-orm'
 import { getDb } from '@/db/client'
 import { reviewFindings, type ReviewFindingState } from '@/db/schema'
@@ -95,19 +95,6 @@ export const getReviewFindingByProviderThreadId = async (params: {
   return row ?? null
 }
 
-export const getReviewFindingByThreadId = async (
-  threadId: string,
-): Promise<ReviewFindingRecord | null> => {
-  const db = getDb()
-  const [row] = await db
-    .select()
-    .from(reviewFindings)
-    .where(eq(reviewFindings.threadId, threadId))
-    .limit(1)
-
-  return row ?? null
-}
-
 export const listReviewFindingsForMr = async (params: {
   projectKey: string
   mrIid: number
@@ -139,25 +126,6 @@ export const updateReviewFindingState = async (
     .returning()
 
   return row ?? null
-}
-
-export const countReviewFindingsByStateForMr = async (params: {
-  projectKey: string
-  mrIid: number
-}): Promise<Partial<Record<ReviewFindingState, number>>> => {
-  const db = getDb()
-  const rows = await db
-    .select({
-      state: reviewFindings.state,
-      total: count(),
-    })
-    .from(reviewFindings)
-    .where(
-      and(eq(reviewFindings.projectKey, params.projectKey), eq(reviewFindings.mrIid, params.mrIid)),
-    )
-    .groupBy(reviewFindings.state)
-
-  return Object.fromEntries(rows.map((row) => [row.state, row.total]))
 }
 
 export const countReviewFindingSeveritiesForMr = async (params: {

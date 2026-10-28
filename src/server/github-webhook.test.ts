@@ -7,8 +7,8 @@ import {
   classifyGithubPullRequest,
   classifyGithubReviewComment,
   createGithubWebhookRoute,
-  verifyGithubSignature,
 } from '@/server/github-webhook'
+import { verifyGithubSignature } from '@/server/webhook-auth'
 
 const project = {
   key: 'repo',
@@ -25,26 +25,14 @@ const project = {
   review: {
     llm: { model: 'model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'model',
-      thinking_level: 'minimal',
-      timeout_ms: 45_000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
   },
 } satisfies GitHubProjectConfig
 
@@ -77,9 +65,9 @@ describe('verifyGithubSignature', () => {
     const body = '{"ok":true}'
     const signature = `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`
 
-    expect(verifyGithubSignature('secret', body, signature)).toBe(true)
-    expect(verifyGithubSignature('secret', body, 'sha256=bad')).toBe(false)
-    expect(verifyGithubSignature('secret', body, undefined)).toBe(false)
+    expect(verifyGithubSignature('secret', body, signature)).toBeNull()
+    expect(verifyGithubSignature('secret', body, 'sha256=bad')).toBe('signature_mismatch')
+    expect(verifyGithubSignature('secret', body, undefined)).toBe('missing_signature_headers')
   })
 })
 
@@ -95,6 +83,7 @@ describe('classifyGithubPullRequest', () => {
       labels: ['bug'],
       sourceBranch: 'feature/test',
       targetBranch: 'main',
+      headSha: 'abc123',
     })
   })
 
@@ -121,7 +110,7 @@ describe('classifyGithubPullRequest', () => {
 
 describe('classifyGithubIssueComment', () => {
   test('normalizes PR issue comments to note events', () => {
-    const result = classifyGithubIssueComment(project, {
+    const event = classifyGithubIssueComment(project, {
       action: 'created',
       repository: { id: 123, full_name: 'org/repo' },
       issue: { number: 42, pull_request: {} },
@@ -133,16 +122,21 @@ describe('classifyGithubIssueComment', () => {
       },
     })
 
-    expect(result.event).toEqual({
+    expect(event).toEqual({
       type: 'mr_note_received',
       projectKey: 'repo',
       projectId: 123,
-      mrIid: 42,
-      noteId: 99,
+      note: {
+        mrIid: 42,
+        noteId: 99,
+        body: '@mend hello',
+        author: { id: 7, username: 'alice' },
+        isDiffNote: false,
+        url: 'https://github.com/org/repo/pull/42#issuecomment-99',
+        createdAt: undefined,
+        updatedAt: undefined,
+      },
     })
-    expect(result.payload?.object_attributes.discussion_id).toBeNull()
-    expect(result.payload?.object_attributes.type).toBeNull()
-    expect(result.payload?.user.username).toBe('alice')
   })
 })
 
@@ -151,7 +145,7 @@ describe('classifyGithubReviewComment', () => {
     const fetchMock = mock()
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
-    const result = classifyGithubReviewComment(project, {
+    const event = classifyGithubReviewComment(project, {
       action: 'created',
       repository: { id: 123, full_name: 'org/repo' },
       pull_request: { number: 42 },
@@ -163,8 +157,11 @@ describe('classifyGithubReviewComment', () => {
       },
     })
 
-    expect(result.payload?.object_attributes.discussion_id).toBeNull()
-    expect(result.payload?.object_attributes.type).toBe('DiffNote')
+    expect(event).toMatchObject({
+      type: 'mr_note_received',
+      note: { mrIid: 42, noteId: 99, isDiffNote: true },
+    })
+    expect(event.type === 'mr_note_received' && event.note.discussionId).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
@@ -228,6 +225,24 @@ describe('github webhook route', () => {
     const res = await post(body, 'ping')
 
     expect(res.status).toBe(401)
+  })
+
+  test('ignores unsupported events', async () => {
+    const body = JSON.stringify({ repository: { id: 123, full_name: 'org/repo' } })
+    const res = await post(body, 'push', sign(body))
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ type: 'ignored', reason: 'event "push"' })
+  })
+
+  test('rejects a supported event with an invalid payload', async () => {
+    const body = JSON.stringify({
+      action: 'opened',
+      repository: { id: 123, full_name: 'org/repo' },
+    })
+    const res = await post(body, 'pull_request', sign(body))
+
+    expect(res.status).toBe(400)
   })
 
   test('rejects unknown repositories', async () => {

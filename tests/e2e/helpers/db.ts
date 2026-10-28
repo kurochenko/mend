@@ -16,7 +16,6 @@ export const truncateReviewFlowTables = async (): Promise<void> => {
       review_findings,
       review_messages,
       review_threads,
-      mr_fix_batches,
       mr_status_notes,
       mr_review_queue,
       review_runs,

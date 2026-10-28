@@ -192,6 +192,21 @@ export const deleteReviewQueueRecord = async (id: string): Promise<void> => {
   await db.delete(mrReviewQueue).where(eq(mrReviewQueue.id, id))
 }
 
+const recoveredPendingRequest = (
+  row: ReviewQueueRecord,
+): Pick<ReviewQueueRecord, 'pendingEvent' | 'pendingPayload' | 'pendingCommitSha'> =>
+  row.pendingEvent
+    ? {
+        pendingEvent: row.pendingEvent,
+        pendingPayload: row.pendingPayload,
+        pendingCommitSha: row.pendingCommitSha,
+      }
+    : {
+        pendingEvent: row.runningEvent,
+        pendingPayload: row.runningPayload,
+        pendingCommitSha: row.runningCommitSha,
+      }
+
 export const recoverReviewQueueAfterRestart = async (): Promise<number> => {
   const db = getDb()
   const rows = await db.select().from(mrReviewQueue).where(isNotNull(mrReviewQueue.runningEvent))
@@ -200,9 +215,7 @@ export const recoverReviewQueueAfterRestart = async (): Promise<number> => {
     await db
       .update(mrReviewQueue)
       .set({
-        pendingEvent: row.pendingEvent ?? row.runningEvent,
-        pendingPayload: row.pendingPayload ?? row.runningPayload,
-        pendingCommitSha: row.pendingCommitSha ?? row.runningCommitSha,
+        ...recoveredPendingRequest(row),
         runningEvent: null,
         runningPayload: null,
         runningCommitSha: null,

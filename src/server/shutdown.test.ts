@@ -22,12 +22,12 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
 }
 
 describe('createShutdownHandler', () => {
-  test('sets draining mode, stops server, waits for work, closes db, and exits cleanly', async () => {
+  test('stops claiming review jobs in-process, stops server, waits for work, closes db, and exits cleanly', async () => {
     const calls: string[] = []
     const exited = deferred<number>()
     const handler = createShutdownHandler({
-      setServiceRuntimeMode: mock(async (mode) => {
-        calls.push(`mode:${mode}`)
+      stopClaimingReviewJobs: mock(() => {
+        calls.push('stop-claiming')
       }),
       stopServer: mock(async () => {
         calls.push('stop-server')
@@ -39,7 +39,7 @@ describe('createShutdownHandler', () => {
         calls.push(`wait:${params.timeoutMs}`)
         return {
           drained: true,
-          counts: { reviewQueueEntries: 0, fixBatchEntries: 0 },
+          counts: { reviewQueueEntries: 0 },
         }
       }),
       closeDb: mock(async () => {
@@ -58,7 +58,7 @@ describe('createShutdownHandler', () => {
     await exited.promise
 
     expect(calls).toEqual([
-      'mode:draining',
+      'stop-claiming',
       'stop-server',
       'clear-timers',
       `wait:${SHUTDOWN_GRACE_PERIOD_MS}`,
@@ -71,11 +71,11 @@ describe('createShutdownHandler', () => {
     const calls: string[] = []
     const wait = deferred<{
       drained: true
-      counts: { reviewQueueEntries: 0; fixBatchEntries: 0 }
+      counts: { reviewQueueEntries: 0 }
     }>()
     const handler = createShutdownHandler({
-      setServiceRuntimeMode: mock(async (mode) => {
-        calls.push(`mode:${mode}`)
+      stopClaimingReviewJobs: mock(() => {
+        calls.push('stop-claiming')
       }),
       stopServer: mock(async () => {
         calls.push('stop-server')
@@ -107,7 +107,7 @@ describe('createShutdownHandler', () => {
 
     wait.resolve({
       drained: true,
-      counts: { reviewQueueEntries: 0, fixBatchEntries: 0 },
+      counts: { reviewQueueEntries: 0 },
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
 

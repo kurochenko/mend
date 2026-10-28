@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import {
   buildPersistablePostedReviewFindings,
   mapPublishedInlineThreadRefs,
+  resolveReviewedDiffContext,
 } from '@/mastra/review/publish-executor'
 import type { PlannedInlineDraft } from '@/mastra/review/publish-plan'
 
@@ -95,5 +96,56 @@ describe('buildPersistablePostedReviewFindings', () => {
         metadata: { kind: 'inline_comment', inlineComment },
       },
     ])
+  })
+})
+
+const reviewedDiff = [
+  'diff --git a/src/app.ts b/src/app.ts',
+  '--- a/src/app.ts',
+  '+++ b/src/app.ts',
+  '@@ -1,1 +1,2 @@',
+  ' const a = 1',
+  '+const b = 2',
+  '',
+].join('\n')
+
+describe('resolveReviewedDiffContext', () => {
+  it('anchors positions on the reviewed commit diff refs instead of the current MR head', async () => {
+    const reviewedRefs = { baseSha: 'reviewed-base', headSha: 'reviewed', startSha: 'start' }
+    const fetchDiffRefs = mock(async () => ({ baseSha: 'base', headSha: 'newer-head' }))
+    const fetchDiffRefsForCommit = mock(async () => reviewedRefs)
+    const readDiff = mock(async () => reviewedDiff)
+
+    const result = await resolveReviewedDiffContext({
+      provider: { fetchDiffRefs, fetchDiffRefsForCommit },
+      mrIid: 5,
+      commitSha: 'reviewed',
+      readDiff,
+    })
+
+    expect(result.diffRefs).toEqual(reviewedRefs)
+    expect(result.diffMap.get('src/app.ts')?.get(2)).toBeDefined()
+    expect(fetchDiffRefsForCommit).toHaveBeenCalledWith(5, 'reviewed')
+    expect(readDiff).toHaveBeenCalledWith('reviewed-base')
+    expect(fetchDiffRefs).not.toHaveBeenCalled()
+  })
+
+  it('leaves inline comments unanchored when the reviewed commit has no diff refs', async () => {
+    const currentRefs = { baseSha: 'base', headSha: 'newer-head', startSha: 'start' }
+    const readDiff = mock(async () => reviewedDiff)
+
+    const result = await resolveReviewedDiffContext({
+      provider: {
+        fetchDiffRefs: mock(async () => currentRefs),
+        fetchDiffRefsForCommit: mock(async () => null),
+      },
+      mrIid: 5,
+      commitSha: 'reviewed',
+      readDiff,
+    })
+
+    expect(result.diffRefs).toEqual(currentRefs)
+    expect(result.diffMap.size).toBe(0)
+    expect(readDiff).not.toHaveBeenCalled()
   })
 })

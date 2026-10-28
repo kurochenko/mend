@@ -236,33 +236,6 @@ describe('buildStatusNoteBody', () => {
     expect(body).not.toContain('60s')
   })
 
-  test('renders finding decision counts when present', async () => {
-    const body = renderStatusNoteBody({
-      input: {
-        state: 'completed',
-        event: makeEvent(),
-        runningSha: '3333333344444444',
-        reviewMode: 'update',
-        runId: 'run-duration',
-      },
-      reviewRuns: [],
-      findingStateCounts: {
-        pending: 2,
-        accepted: 3,
-        rejected: 1,
-        deferred: 1,
-      },
-      updatedAt: '2026-03-07T19:00:00.000Z',
-    })
-
-    expect(body).toContain('### Finding Decisions')
-    expect(body).toContain(
-      '| Pending | Accepted | Rejected | Deferred | Fixed | Not fixed | Resolved |',
-    )
-    expect(body).toContain('| ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
-    expect(body).toContain('| 2 | 3 | 1 | 1 | 0 | 0 | 0 |')
-  })
-
   test('renders ensemble review configuration with thinking levels when present', async () => {
     const body = renderStatusNoteBody({
       input: {
@@ -309,7 +282,6 @@ describe('buildStatusNoteBody', () => {
         performance: 0,
         suggestion: 1,
       },
-      findingStateCounts: { pending: 1 },
       updatedAt: '2026-03-07T19:00:00.000Z',
     })
     const bodyWithoutFindings = renderStatusNoteBody({
@@ -325,9 +297,6 @@ describe('buildStatusNoteBody', () => {
     })
 
     expect(body).toContain('**Findings by severity (tracked on MR):** 4 · 2🐞 1🔒 0⚡ 1💡')
-    expect(body.indexOf('**Findings by severity (tracked on MR):**')).toBeLessThan(
-      body.indexOf('### Finding Decisions'),
-    )
     expect(bodyWithoutFindings).not.toContain('**Findings by severity (tracked on MR):**')
   })
 })

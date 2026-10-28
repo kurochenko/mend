@@ -4,6 +4,7 @@ import {
   buildFinderInstructions,
   buildFinderPrompt,
   buildSynthesizerInstructions,
+  buildVerifierInstructions,
   createEnsembleReviewHarness,
   dedupeCandidates,
   detectReviewMode,
@@ -16,6 +17,7 @@ import {
 } from '@/agents/ensemble-harness'
 import type { ReviewOutputV2 } from '@/mastra/review/schema'
 import {
+  DEFAULT_REVIEW_USER_PROMPT,
   FINDER_PREVIOUS_FINDINGS_GUIDANCE,
   RESOLUTION_INSTRUCTIONS,
 } from '@/mastra/review/prompt-templates'
@@ -134,7 +136,7 @@ const invokeConfig = {
   model: 'outer-model',
   thinkingLevel: 'medium' as const,
   instructions: baseInstructions,
-  prompt: basePrompt,
+  prompt: DEFAULT_REVIEW_USER_PROMPT,
   changedFiles: ['src/app.ts'],
 }
 
@@ -360,6 +362,8 @@ describe('createEnsembleReviewHarness', () => {
   it('verifies candidates, drops refuted ones, keeps uncertain ones, and skips multi-role candidates', async () => {
     let synthesizerInstructions = ''
     const calls: string[] = []
+    const verifierPrompts: string[] = []
+    const verifierInstructions: string[] = []
     const harness = createRoutingHarness((config) => {
       const { sessionDir } = config
       calls.push(sessionDir)
@@ -394,6 +398,8 @@ describe('createEnsembleReviewHarness', () => {
         return createResult({ harness: 'codex', model: 'gpt-5.5' }, reviewOutput('Deep summary'))
       }
       if (sessionDir.includes('verify-')) {
+        verifierPrompts.push(config.prompt)
+        verifierInstructions.push(config.instructions)
         if (config.prompt.includes('Refuted candidate')) {
           return createResult({ harness: 'codex', model: 'gpt-5.5' }, verificationOutput('refuted'))
         }
@@ -418,6 +424,20 @@ describe('createEnsembleReviewHarness', () => {
 
     expect(result.success).toBe(true)
     expect(calls.filter((call) => call.includes('verify-'))).toHaveLength(3)
+    expect(verifierPrompts).toHaveLength(3)
+    for (const verifierPrompt of verifierPrompts) {
+      expect(verifierPrompt).toContain('@@ -9,6 +9,7 @@ export const run = () => {')
+      expect(verifierPrompt).not.toContain('No matching per-file diff hunks')
+    }
+    expect(invokeConfig.instructions).toContain(
+      'Your final output MUST be a JSON object matching this exact schema:',
+    )
+    for (const instructions of verifierInstructions) {
+      expect(instructions).not.toContain(
+        'Your final output MUST be a JSON object matching this exact schema:',
+      )
+      expect(instructions).toContain('You are verifying one candidate finding')
+    }
     expect(synthesizerInstructions).not.toContain('Refuted candidate')
     expect(synthesizerInstructions).toContain('Confirmed candidate')
     expect(synthesizerInstructions).toContain('Uncertain candidate')
@@ -822,5 +842,29 @@ describe('uncertain verification downgrade', () => {
     expect(result.success).toBe(true)
     expect(synthesizerInstructions).toContain('"severity": "suggestion"')
     expect(synthesizerInstructions).not.toContain('"severity": "bug"')
+  })
+})
+
+describe('buildVerifierInstructions', () => {
+  it('drops the review output schema and resolution-verdict instructions but keeps MR context', () => {
+    const instructions = [
+      'Review MR !7',
+      'MR title: Fix checkout',
+      '',
+      RESOLUTION_INSTRUCTIONS,
+      '',
+      'Your final output MUST be a JSON object matching this exact schema:',
+      '{ "findings": [] }',
+      'Output ONLY the JSON object as your final message, no other text around it.',
+    ].join('\n')
+
+    const verifier = buildVerifierInstructions(instructions)
+
+    expect(verifier).toContain('MR title: Fix checkout')
+    expect(verifier).not.toContain(RESOLUTION_INSTRUCTIONS)
+    expect(verifier).not.toContain('"findings"')
+    expect(verifier).toContain(
+      'Answer only in the verdict JSON format requested in the user message.',
+    )
   })
 })

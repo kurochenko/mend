@@ -6,47 +6,76 @@ export interface DiffLine {
 export type DiffMap = Map<string, Map<number, DiffLine>>
 
 const DIFF_HEADER_RE = /^diff --git a\/(.+) b\/(.+)$/
-const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+
+interface HunkState {
+  fileMap: Map<number, DiffLine>
+  oldLine: number
+  newLine: number
+  oldRemaining: number
+  newRemaining: number
+}
+
+const parseHunkCount = (value: string | undefined): number =>
+  value === undefined ? 1 : parseInt(value, 10)
+
+const isHunkOpen = (hunk: HunkState | null): hunk is HunkState =>
+  hunk !== null && (hunk.oldRemaining > 0 || hunk.newRemaining > 0)
+
+const consumeHunkLine = (hunk: HunkState, line: string): boolean => {
+  if (line.startsWith('+')) {
+    hunk.fileMap.set(hunk.newLine, { new_line: hunk.newLine })
+    hunk.newLine++
+    hunk.newRemaining--
+    return true
+  }
+
+  if (line.startsWith('-')) {
+    hunk.oldLine++
+    hunk.oldRemaining--
+    return true
+  }
+
+  if (line.startsWith(' ') || line === '') {
+    hunk.fileMap.set(hunk.newLine, { old_line: hunk.oldLine, new_line: hunk.newLine })
+    hunk.oldLine++
+    hunk.newLine++
+    hunk.oldRemaining--
+    hunk.newRemaining--
+    return true
+  }
+
+  return line.startsWith('\\')
+}
 
 export const parseDiff = (diffOutput: string): DiffMap => {
   const result: DiffMap = new Map()
-  let currentFile: string | null = null
-  let oldLine = 0
-  let newLine = 0
+  let fileMap: Map<number, DiffLine> | null = null
+  let hunk: HunkState | null = null
 
   for (const line of diffOutput.split('\n')) {
+    if (isHunkOpen(hunk) && consumeHunkLine(hunk, line)) {
+      continue
+    }
+
     const headerMatch = line.match(DIFF_HEADER_RE)
     if (headerMatch) {
-      currentFile = headerMatch[2]!
-      if (!result.has(currentFile)) {
-        result.set(currentFile, new Map())
-      }
+      const file = headerMatch[2]!
+      fileMap = result.get(file) ?? new Map<number, DiffLine>()
+      result.set(file, fileMap)
+      hunk = null
       continue
     }
 
     const hunkMatch = line.match(HUNK_RE)
-    if (hunkMatch) {
-      oldLine = parseInt(hunkMatch[1]!, 10)
-      newLine = parseInt(hunkMatch[2]!, 10)
-      continue
-    }
-
-    if (!currentFile) continue
-
-    const fileMap = result.get(currentFile)!
-
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      fileMap.set(newLine, { new_line: newLine })
-      newLine++
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      oldLine++
-    } else if (line.startsWith(' ') || line === '') {
-      fileMap.set(newLine, {
-        old_line: oldLine,
-        new_line: newLine,
-      })
-      oldLine++
-      newLine++
+    if (hunkMatch && fileMap) {
+      hunk = {
+        fileMap,
+        oldLine: parseInt(hunkMatch[1]!, 10),
+        oldRemaining: parseHunkCount(hunkMatch[2]),
+        newLine: parseInt(hunkMatch[3]!, 10),
+        newRemaining: parseHunkCount(hunkMatch[4]),
+      }
     }
   }
 

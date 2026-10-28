@@ -1,7 +1,8 @@
 import type { ProjectConfig } from '@/config'
 import { createWithReconciliation } from '@/integrations/idempotent'
 import type { ReviewProvider } from '@/integrations/provider/client'
-import type { ProviderNote, ProviderThread } from '@/integrations/provider/types'
+import type { DiffRefs, ProviderNote, ProviderThread } from '@/integrations/provider/types'
+import { parseDiff, type DiffMap } from '@/lib/diff'
 import { toErrorMessage } from '@/lib/errors'
 import { isCurrentRunDraft, isMendDraft, parseMendMarkers } from '@/mastra/review/markers'
 import type { PostPlan } from '@/mastra/review/publish-plan'
@@ -23,6 +24,32 @@ export const findPublishedSummaryForRun = (
     const markers = parseMendMarkers(note.body)
     return markers.runId === reviewRunId && markers.isSummary
   })
+
+export const resolveReviewedDiffContext = async (params: {
+  provider: Pick<ReviewProvider, 'fetchDiffRefs' | 'fetchDiffRefsForCommit'>
+  mrIid: number
+  commitSha: string
+  readDiff: (baseSha: string) => Promise<string>
+}): Promise<{ diffRefs: DiffRefs; diffMap: DiffMap }> => {
+  const reviewedDiffRefs = await params.provider.fetchDiffRefsForCommit(
+    params.mrIid,
+    params.commitSha,
+  )
+  if (reviewedDiffRefs) {
+    return {
+      diffRefs: reviewedDiffRefs,
+      diffMap: parseDiff(await params.readDiff(reviewedDiffRefs.baseSha)),
+    }
+  }
+
+  console.warn(
+    `[post] no diff refs found for reviewed commit ${params.commitSha}; posting inline comments as general discussions`,
+  )
+  return {
+    diffRefs: await params.provider.fetchDiffRefs(params.mrIid),
+    diffMap: new Map(),
+  }
+}
 
 export const findMrNoteByBody = (notes: ProviderNote[], body: string): ProviderNote | undefined =>
   notes.find((note) => note.body === body)
@@ -155,6 +182,40 @@ export const mapPublishedInlineThreadRefs = (params: {
   return { postedInlineComments, postedFindings }
 }
 
+const publishSummaryNoteLast = async (params: {
+  provider: ReviewProvider
+  project: ProjectConfig
+  input: PostPlan['input']
+  plan: PostPlan
+}): Promise<number> => {
+  const { provider, project, input } = params
+  console.log('[post] creating summary note')
+  const summaryNote = await provider.publishSummaryNote({
+    changeNumber: input.mrIid,
+    body: params.plan.markedSummaryBody,
+    matchSummaryNote: (notes) => findPublishedSummaryForRun(notes, input.reviewRunId),
+  })
+  if (summaryNote.reconciled) {
+    console.warn('[post] re-used existing summary note for this run')
+  }
+
+  try {
+    await persistPublishedThreads({
+      project,
+      projectKey: input.projectKey,
+      mrIid: input.mrIid,
+      reviewRunId: input.reviewRunId,
+      threads: await provider.listThreads(input.mrIid),
+    })
+  } catch (error) {
+    console.warn(
+      `[post] failed to persist the summary note thread locally: ${toErrorMessage(error)}`,
+    )
+  }
+
+  return summaryNote.id
+}
+
 export const executePostPlan = async (params: {
   plan: PostPlan
   project: ProjectConfig
@@ -172,7 +233,6 @@ export const executePostPlan = async (params: {
       anchor: draft.anchor,
       logLabel: `${draft.path}:${draft.line}`,
     })),
-    summaryBody: plan.markedSummaryBody,
     diffRefs: plan.diffRefs,
     classifyDraft: (body) => {
       if (isCurrentRunDraft(body, input.reviewRunId)) {
@@ -180,7 +240,6 @@ export const executePostPlan = async (params: {
       }
       return isMendDraft(body) ? 'mend_other_run' : 'foreign'
     },
-    matchSummaryNote: (notes) => findPublishedSummaryForRun(notes, input.reviewRunId),
   })
   let postedInlineComments: PostedInlineComment[] = plan.inlineComments.map(() =>
     emptyPostedThreadRef(),
@@ -188,8 +247,6 @@ export const executePostPlan = async (params: {
   let postedFindings: PostedFinding[] = plan.findings.map(() => emptyPostedThreadRef())
   const threadedFindings: ThreadedFinding[] = []
   const threadedInlineComments: ThreadedInlineComment[] = []
-
-  let summaryNoteId = publishResult.summaryNoteId
 
   try {
     const threads = await provider.listThreads(input.mrIid)
@@ -200,7 +257,6 @@ export const executePostPlan = async (params: {
       reviewRunId: input.reviewRunId,
       threads,
     })
-    summaryNoteId = persisted.summaryNoteId ?? summaryNoteId
     const postedRefs = mapPublishedInlineThreadRefs({
       inlineDrafts: plan.inlineDrafts,
       inlineCommentCount: plan.inlineComments.length,
@@ -316,6 +372,8 @@ export const executePostPlan = async (params: {
       `[post] thread resolution: ${resolutionStats.resolvedThreadCount} resolved, ${resolutionStats.partiallyFixedThreadCount} partially fixed, ${resolutionStats.unmatchedVerdictCount} unmatched`,
     )
   }
+
+  const summaryNoteId = await publishSummaryNoteLast({ provider, project, input, plan })
 
   return {
     postedInlineComments,

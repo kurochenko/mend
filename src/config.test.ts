@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { parseProjectsFileConfig } from '@/config'
+import {
+  findRemovedSettings,
+  withoutRemovedSettings,
+  parseProjectsFileConfig,
+  parseProjectsFileConfigOrExplain,
+} from '@/config'
 
 const baseProject = {
   platform: 'gitlab',
@@ -46,8 +51,22 @@ describe('parseProjectsFileConfig', () => {
       },
     })
 
-    expect(config.projects.app?.platform).toBe('gitlab')
+    const project = config.projects.app
+    expect(project?.platform === 'gitlab' && project.webhook_signing_token).toEqual(
+      Buffer.from('test'),
+    )
   })
+
+  test.each(['whsec_', 'whsec_not base64!', 'whsec_dGVzdA==\n'])(
+    'rejects a malformed webhook signing token %p',
+    (signingToken) => {
+      expect(() =>
+        parseProjectsFileConfig({
+          projects: { app: { ...baseProject, webhook_signing_token: signingToken } },
+        }),
+      ).toThrow('must be whsec_ followed by a base64 key')
+    },
+  )
 
   test('rejects a gitlab project without a webhook secret or signing token', () => {
     const { webhook_secret: _secret, ...unsignedProject } = baseProject
@@ -63,66 +82,79 @@ describe('parseProjectsFileConfig', () => {
     expect(() => parseProjectsFileConfig({ projects: { app: unsignedProject } })).toThrow()
   })
 
-  test('keeps fixer workspace optional for existing project configs', () => {
-    const config = parseProjectsFileConfig({
-      projects: {
-        app: baseProject,
-      },
-    })
+  test('applies review defaults for a minimal project config', () => {
+    const config = parseProjectsFileConfig({ projects: { app: baseProject } })
 
-    expect(config.projects.app?.review.fix.workspace).toBeUndefined()
-    expect(config.projects.app?.review.fix.enabled).toBe(false)
-    expect(config.projects.app?.review.fix.automatic).toBe(false)
-    expect(config.projects.app?.review.fix.max_loops).toBe(3)
-    expect(config.projects.app?.review.intent.harness).toBe('codex')
-    expect(config.projects.app?.review.intent.model).toBe('gpt-6-luna')
-    expect(config.projects.app?.review.flags.bug_history).toBe(true)
-    expect(config.projects.app?.review.template.prompt).toBe('auto')
-    expect(config.projects.app?.review.template.label_prefix).toBe('ai-review:')
+    expect(config.projects.app?.review.flags).toEqual({
+      structured_findings_post: true,
+      structural_signals: true,
+      bug_history: true,
+      dry_run: false,
+    })
   })
 
-  test('defaults the intent model to a Pi model id when the Pi harness is selected', () => {
+  test('ignores fix loop and triage settings left over from older configs', () => {
     const config = parseProjectsFileConfig({
       projects: {
         app: {
           ...baseProject,
           review: {
             ...baseProject.review,
-            intent: { harness: 'pi' },
+            triage: { trusted_usernames: ['someone'] },
+            fix: { enabled: true, workspace: { provider: 'docker', image: 'oven/bun:1.3.0' } },
           },
         },
       },
     })
 
-    expect(config.projects.app?.review.intent.model).toBe('openai-codex/gpt-6-luna')
+    expect(config.projects.app?.review).not.toHaveProperty('fix')
+    expect(config.projects.app?.review).not.toHaveProperty('triage')
   })
 
-  test('parses codex intent classifier harness', () => {
-    const config = parseProjectsFileConfig({
-      projects: {
-        app: {
-          ...baseProject,
-          review: {
-            ...baseProject.review,
-            intent: {
-              harness: 'codex',
-              model: 'gpt-5-mini',
-              thinking_level: 'minimal',
-              timeout_ms: 30_000,
-              failure_policy: 'mixed',
+  test('lists removed settings so startup can warn about them', () => {
+    expect(
+      findRemovedSettings({
+        projects: {
+          app: {
+            review: {
+              fix: { enabled: true },
+              triage: {},
+              intent: { harness: 'codex' },
+              template: { prompt: 'auto' },
+              flags: { prompt_templates_v2: true, schema_v2: true },
+            },
+          },
+          other: { review: { llm: { model: 'm' } } },
+        },
+      }),
+    ).toEqual([
+      'projects.app.review.fix is no longer used and is ignored (the fix loop was removed; Mend only reviews); remove it from your config',
+      'projects.app.review.triage is no longer used and is ignored (@mend triage commands were removed); remove it from your config',
+      'projects.app.review.intent is no longer used and is ignored (the intent classifier was removed); remove it from your config',
+      'projects.app.review.template is no longer used and is ignored (review templates were removed); remove it from your config',
+      'projects.app.review.flags.prompt_templates_v2 is no longer used and is ignored (review templates were removed); remove it from your config',
+      'projects.app.review.flags.schema_v2 is no longer used and is ignored (schema v2 is always used); remove it from your config',
+    ])
+    expect(findRemovedSettings(null)).toEqual([])
+  })
+
+  test('drops removed settings before env references inside them are resolved', () => {
+    const config = parseProjectsFileConfig(
+      withoutRemovedSettings({
+        projects: {
+          app: {
+            ...baseProject,
+            review: {
+              ...baseProject.review,
+              fix: { workspace: { env: { TOKEN: '${MEND_REMOVED_SETTING_VAR}' } } },
+              flags: { schema_v2: '${MEND_REMOVED_SETTING_VAR}' },
             },
           },
         },
-      },
-    })
+      }),
+    )
 
-    expect(config.projects.app?.review.intent).toEqual({
-      harness: 'codex',
-      model: 'gpt-5-mini',
-      thinking_level: 'minimal',
-      timeout_ms: 30_000,
-      failure_policy: 'mixed',
-    })
+    expect(config.projects.app?.review).not.toHaveProperty('fix')
   })
 
   test('parses ensemble review harness configuration with defaults', () => {
@@ -164,129 +196,12 @@ describe('parseProjectsFileConfig', () => {
     expect(config.projects.app?.review.comparison.harness).toBe('ensemble')
   })
 
-  test('requires workspace when fix loop is enabled', () => {
+  test('explains invalid config with the file name and field path', () => {
     expect(() =>
-      parseProjectsFileConfig({
-        projects: {
-          app: {
-            ...baseProject,
-            review: {
-              ...baseProject.review,
-              fix: { enabled: true },
-            },
-          },
-        },
+      parseProjectsFileConfigOrExplain('mend.yml', {
+        projects: { app: { ...baseProject, platform: 'github', repo: 'not-a-repo' } },
       }),
-    ).toThrow('review.fix.workspace is required')
-  })
-
-  test('rejects unsafe fixer workspace mounts', () => {
-    expect(() =>
-      parseProjectsFileConfig({
-        projects: {
-          app: {
-            ...baseProject,
-            review: {
-              ...baseProject.review,
-              fix: {
-                enabled: true,
-                workspace: {
-                  provider: 'docker',
-                  image: 'oven/bun:1.3.0',
-                  mounts: [{ source: process.env.HOME ?? '/', target: '/host-home' }],
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toThrow('mount source must not be a host home directory')
-  })
-
-  test('parses docker fixer workspace configuration', () => {
-    const config = parseProjectsFileConfig({
-      projects: {
-        app: {
-          ...baseProject,
-          review: {
-            ...baseProject.review,
-            fix: {
-              agent: {
-                harness: 'codex',
-                model: 'gpt-5.5',
-                thinking_level: 'medium',
-                timeout_ms: 1_200_000,
-              },
-              enabled: true,
-              automatic: true,
-              max_loops: 4,
-              workspace: {
-                provider: 'docker',
-                image: 'oven/bun:1.3.0',
-                env: {
-                  TOKEN: { from_env: 'APP_TOKEN' },
-                  MODE: { value: 'test' },
-                  FLAG: true,
-                },
-                mounts: [{ source: '/tmp/cache', target: '/cache' }],
-                setup: ['bun install'],
-                checks: ['bun run check'],
-              },
-            },
-          },
-        },
-      },
-    })
-
-    const workspace = config.projects.app?.review.fix.workspace
-    expect(config.projects.app?.review.fix.agent).toEqual({
-      harness: 'codex',
-      model: 'gpt-5.5',
-      thinking_level: 'medium',
-      timeout_ms: 1_200_000,
-    })
-    expect(config.projects.app?.review.fix.enabled).toBe(true)
-    expect(config.projects.app?.review.fix.automatic).toBe(true)
-    expect(config.projects.app?.review.fix.max_loops).toBe(4)
-    expect(config.projects.app?.review.triage.trusted_usernames).toEqual([])
-    expect(workspace).toEqual({
-      provider: 'docker',
-      image: 'oven/bun:1.3.0',
-      network: 'none',
-      env: {
-        TOKEN: { from_env: 'APP_TOKEN' },
-        MODE: { value: 'test' },
-        FLAG: true,
-      },
-      mounts: [{ source: '/tmp/cache', target: '/cache', read_only: true }],
-      setup: ['bun install'],
-      checks: ['bun run check'],
-    })
-  })
-
-  test('rejects invalid fixer workspace env names', () => {
-    expect(() =>
-      parseProjectsFileConfig({
-        projects: {
-          app: {
-            ...baseProject,
-            review: {
-              ...baseProject.review,
-              fix: {
-                enabled: true,
-                workspace: {
-                  provider: 'docker',
-                  image: 'oven/bun:1.3.0',
-                  env: {
-                    'BAD-NAME': 'value',
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-    ).toThrow('workspace env name must be a valid shell variable name')
+    ).toThrow(/^Invalid mend\.yml:\n[\s\S]*→ at projects\.app/)
   })
 
   test('parses github project configs', () => {

@@ -9,6 +9,7 @@ const makeProvider = (): ReviewProvider => ({
     throw new Error('unused')
   }),
   fetchDiffRefs: mock(async () => ({ baseSha: 'base', headSha: 'head', startSha: 'start' })),
+  fetchDiffRefsForCommit: mock(async () => null),
   fetchChangedFiles: mock(async () => []),
   listNotes: mock(async () => []),
   createNote: mock(async () => ({ id: 1, body: '', author: null })),
@@ -37,9 +38,8 @@ const makeProvider = (): ReviewProvider => ({
     preExistingDraftCount: 0,
     recoveredDraftCount: 0,
     draftRecoveryAction: 'none' as const,
-    summaryNoteId: 1,
-    summaryReconciled: false,
   })),
+  publishSummaryNote: mock(async () => ({ id: 1, reconciled: false })),
 })
 
 describe('executeThreadResolutions', () => {

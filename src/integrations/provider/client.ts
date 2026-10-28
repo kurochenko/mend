@@ -6,6 +6,8 @@ import type {
   DiffRefs,
   DraftClassification,
   PublishBatchResult,
+  PublishSummaryNoteParams,
+  PublishSummaryNoteResult,
   PublishInlineDraft,
   ProviderKind,
   ProviderNote,
@@ -19,6 +21,7 @@ export interface ReviewProvider {
   fetchCurrentUser(): Promise<ProviderUser>
   fetchChangeRequest(changeNumber: number): Promise<ChangeRequestDetails>
   fetchDiffRefs(changeNumber: number): Promise<DiffRefs>
+  fetchDiffRefsForCommit(changeNumber: number, commitSha: string): Promise<DiffRefs | null>
   fetchChangedFiles(changeNumber: number): Promise<string[]>
   listNotes(changeNumber: number): Promise<ProviderNote[]>
   createNote(changeNumber: number, body: string): Promise<ProviderNote>
@@ -40,11 +43,10 @@ export interface ReviewProvider {
     projectKey: string
     reviewRunId: string
     inlineDrafts: PublishInlineDraft[]
-    summaryBody: string
     diffRefs: DiffRefs
     classifyDraft: (body: string) => DraftClassification
-    matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
   }): Promise<PublishBatchResult>
+  publishSummaryNote(params: PublishSummaryNoteParams): Promise<PublishSummaryNoteResult>
 }
 
 const assertNever = (value: never): never => {

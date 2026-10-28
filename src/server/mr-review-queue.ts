@@ -13,24 +13,19 @@ import {
   type ReviewQueueJob,
   type ReviewQueueRecord,
 } from '@/db/review-queue'
-import { updateReviewRunResult } from '@/db/review-runs'
 import { getServiceRuntimeMode } from '@/db/service-runtime'
 import { createReviewProvider, type ReviewProvider } from '@/integrations/provider/client'
 import { toErrorMessage } from '@/lib/errors'
 import { asMrReviewRequestEvent, type MrReviewRequestEvent } from '@/lib/review-events'
-import {
-  automaticLoopLimitBody,
-  queueAutomaticFixBatch,
-  type AutomaticFixBatchOutcome,
-} from '@/mastra/fix/automatic-batch'
 import { executeMrReview } from '@/mastra/run-mr-review'
-import type { PostStepOutput } from '@/mastra/review/run-result'
 import { mrIidFromLockKey, mrLockKey, withMrLock } from '@/server/mr-locks'
 import { getLatestSuccessfulRun, hasSuccessfulRunForSha } from '@/server/review-context'
+import type { StatusNoteInput } from '@/server/status-note-body'
 import { syncStatusNote } from '@/server/status-note-sync'
 
 const activeWorkers = new Set<string>()
 const runningReviewAbortControllers = new Map<string, AbortController>()
+let processDraining = false
 
 interface ReviewQueueDependencies {
   claimPendingReviewJob: typeof claimPendingReviewJob
@@ -48,8 +43,7 @@ interface ReviewQueueDependencies {
   getLatestSuccessfulRun: typeof getLatestSuccessfulRun
   executeMrReview: typeof executeMrReview
   syncStatusNote: typeof syncStatusNote
-  queueAutomaticFixBatch: typeof queueAutomaticFixBatch
-  updateReviewRunResult: typeof updateReviewRunResult
+  isProcessDraining: () => boolean
 }
 
 const defaultDependencies: ReviewQueueDependencies = {
@@ -68,58 +62,7 @@ const defaultDependencies: ReviewQueueDependencies = {
   getLatestSuccessfulRun,
   executeMrReview,
   syncStatusNote,
-  queueAutomaticFixBatch,
-  updateReviewRunResult,
-}
-
-const createMrNoteOnceByBody = async (params: {
-  provider: ReviewProvider
-  mrIid: number
-  body: string
-}): Promise<void> => {
-  const notes = await params.provider.listNotes(params.mrIid)
-  if (notes.some((note) => note.body === params.body)) {
-    return
-  }
-
-  await params.provider.createNote(params.mrIid, params.body)
-}
-
-const queueAutomaticFixAfterReview = async (params: {
-  project: ProjectConfig
-  provider: ReviewProvider
-  output: PostStepOutput
-  dependencies: ReviewQueueDependencies
-}): Promise<AutomaticFixBatchOutcome['status'] | null> => {
-  if (params.output.featureFlags.dryRun) {
-    return null
-  }
-
-  const persistedFindingCount = params.output.postDiagnostics.persistedFindingCount
-  if (persistedFindingCount === 0) {
-    return params.project.review.fix.enabled && params.project.review.fix.automatic
-      ? 'no_findings'
-      : 'disabled'
-  }
-
-  const automaticOutcome = await params.dependencies.queueAutomaticFixBatch({
-    project: params.project,
-    mrIid: params.output.mrIid,
-  })
-
-  if (automaticOutcome.status === 'queued') {
-    console.log(`[post] queued automatic fix batch for ${automaticOutcome.queuedCount} finding(s)`)
-  }
-
-  if (automaticOutcome.status === 'loop_limit') {
-    await createMrNoteOnceByBody({
-      provider: params.provider,
-      mrIid: params.output.mrIid,
-      body: automaticLoopLimitBody(params.output.projectKey, params.output.mrIid, automaticOutcome),
-    })
-  }
-
-  return automaticOutcome.status
+  isProcessDraining: () => processDraining,
 }
 
 const isMissingRemoteRefFailure = (message: string): boolean => {
@@ -130,20 +73,27 @@ const isMissingRemoteRefFailure = (message: string): boolean => {
   )
 }
 
+export const stopClaimingReviewJobs = (): void => {
+  processDraining = true
+}
+
 const isDraining = async (dependencies: ReviewQueueDependencies): Promise<boolean> =>
-  (await dependencies.getServiceRuntimeMode()) === 'draining'
+  dependencies.isProcessDraining() || (await dependencies.getServiceRuntimeMode()) === 'draining'
 
-const extractWebhookCommitSha = (payload: unknown): string | null => {
-  if (!payload || typeof payload !== 'object') {
-    return null
+const syncQueueStatusNote = async (params: {
+  project: ProjectConfig
+  provider: ReviewProvider
+  dependencies: ReviewQueueDependencies
+  input: StatusNoteInput
+}): Promise<void> => {
+  if (params.project.review.flags.dry_run) {
+    return
   }
 
-  const webhook = payload as {
-    object_attributes?: { last_commit?: { id?: unknown } }
-    pull_request?: { head?: { sha?: unknown } }
-  }
-  const commitSha = webhook.object_attributes?.last_commit?.id ?? webhook.pull_request?.head?.sha
-  return typeof commitSha === 'string' && commitSha.length > 0 ? commitSha : null
+  await params.dependencies.syncStatusNote({
+    input: params.input,
+    dependencies: { provider: params.provider },
+  })
 }
 
 const queueMessageForRecord = (
@@ -176,12 +126,13 @@ const queueMessageForRecord = (
 }
 
 const updateQueuedStatusNote = async (params: {
+  project: ProjectConfig
   record: ReviewQueueRecord
   provider: ReviewProvider
   dependencies: ReviewQueueDependencies
   supersedingRunningReview?: boolean
 }): Promise<void> => {
-  const { record, provider, dependencies } = params
+  const { project, record, provider, dependencies } = params
   const event = asMrReviewRequestEvent(record.runningEvent ?? record.pendingEvent)
   if (!event) {
     return
@@ -193,7 +144,10 @@ const updateQueuedStatusNote = async (params: {
     draining,
     params.supersedingRunningReview ?? false,
   )
-  await dependencies.syncStatusNote({
+  await syncQueueStatusNote({
+    project,
+    provider,
+    dependencies,
     input: {
       state: queueState.state,
       event,
@@ -201,7 +155,6 @@ const updateQueuedStatusNote = async (params: {
       pendingSha: record.pendingCommitSha ?? undefined,
       message: queueState.message,
     },
-    dependencies: { provider },
   })
 }
 
@@ -254,7 +207,7 @@ const runQueuedJob = async (params: {
   dependencies: ReviewQueueDependencies
   signal: AbortSignal
 }): Promise<void> => {
-  const { mastra, job, provider, dependencies, signal } = params
+  const { mastra, project, job, provider, dependencies, signal } = params
   let statusReviewMode: 'initial' | 'update' = 'initial'
   let statusPreviousReviewedSha: string | null = null
   let statusRunningSha: string | undefined
@@ -270,14 +223,16 @@ const runQueuedJob = async (params: {
       console.log(
         `[queue] skipping ${job.event.projectKey} MR !${job.event.mrIid}: SHA ${commitSha.slice(0, 8)} already reviewed`,
       )
-      await dependencies.syncStatusNote({
+      await syncQueueStatusNote({
+        project,
+        provider,
+        dependencies,
         input: {
           state: 'no_change',
           event: job.event,
           runningSha: commitSha,
           message: 'Latest SHA already reviewed successfully; skipping duplicate event',
         },
-        dependencies: { provider },
       })
       return
     }
@@ -300,7 +255,10 @@ const runQueuedJob = async (params: {
     console.log(
       `[queue] starting ${reviewMode} review for ${job.event.projectKey} MR !${job.event.mrIid} SHA ${commitSha.slice(0, 8)}`,
     )
-    await dependencies.syncStatusNote({
+    await syncQueueStatusNote({
+      project,
+      provider,
+      dependencies,
       input: {
         state: 'running',
         event: job.event,
@@ -309,7 +267,6 @@ const runQueuedJob = async (params: {
         previousReviewedSha,
         message: 'Review is in progress',
       },
-      dependencies: { provider },
     })
 
     const execution = await dependencies.executeMrReview({
@@ -334,22 +291,10 @@ const runQueuedJob = async (params: {
     })
 
     if (execution.workflowResult.status === 'success') {
-      if (execution.output) {
-        const automaticFixBatchStatus = await queueAutomaticFixAfterReview({
-          project: params.project,
-          provider,
-          output: execution.output,
-          dependencies,
-        })
-        execution.output.postDiagnostics.automaticFixBatchStatus = automaticFixBatchStatus
-        await dependencies.updateReviewRunResult({
-          id: execution.reviewRunId,
-          result: execution.output,
-          comparisonResult: execution.output.comparisonResult,
-        })
-      }
-
-      await dependencies.syncStatusNote({
+      await syncQueueStatusNote({
+        project,
+        provider,
+        dependencies,
         input: {
           state: 'completed',
           event: job.event,
@@ -359,7 +304,6 @@ const runQueuedJob = async (params: {
           runId: execution.reviewRunId,
           message: `Completed with assessment ${execution.output?.assessment ?? 'unknown'}`,
         },
-        dependencies: { provider },
       })
       console.log(`[webhook] review completed for ${job.event.projectKey} MR !${job.event.mrIid}`)
       console.log(`[webhook] run id: ${execution.reviewRunId}`)
@@ -371,7 +315,10 @@ const runQueuedJob = async (params: {
       return
     }
 
-    await dependencies.syncStatusNote({
+    await syncQueueStatusNote({
+      project,
+      provider,
+      dependencies,
       input: {
         state: 'failed',
         event: job.event,
@@ -381,7 +328,6 @@ const runQueuedJob = async (params: {
         runId: execution.reviewRunId,
         message: `Workflow status: ${execution.workflowResult.status}`,
       },
-      dependencies: { provider },
     })
     console.error(
       `[webhook] review ${execution.workflowResult.status} for ${job.event.projectKey} MR !${job.event.mrIid}`,
@@ -395,7 +341,10 @@ const runQueuedJob = async (params: {
     const message = toErrorMessage(error)
 
     if (isMissingRemoteRefFailure(message)) {
-      await dependencies.syncStatusNote({
+      await syncQueueStatusNote({
+        project,
+        provider,
+        dependencies,
         input: {
           state: 'no_change',
           event: job.event,
@@ -404,7 +353,6 @@ const runQueuedJob = async (params: {
           previousReviewedSha: statusPreviousReviewedSha,
           message: 'Source branch no longer exists on remote; skipping review',
         },
-        dependencies: { provider },
       })
       console.warn(
         `[webhook] review skipped for ${job.event.projectKey} MR !${job.event.mrIid}: ${message}`,
@@ -412,7 +360,10 @@ const runQueuedJob = async (params: {
       return
     }
 
-    await dependencies.syncStatusNote({
+    await syncQueueStatusNote({
+      project,
+      provider,
+      dependencies,
       input: {
         state: 'failed',
         event: job.event,
@@ -421,7 +372,6 @@ const runQueuedJob = async (params: {
         previousReviewedSha: statusPreviousReviewedSha,
         message,
       },
-      dependencies: { provider },
     })
     console.error(
       `[webhook] review failed for ${job.event.projectKey} MR !${job.event.mrIid}:`,
@@ -487,18 +437,8 @@ const processQueueLoop = async (
       })
 
       if (remaining?.pendingEvent && (await isDraining(dependencies))) {
-        await updateQueuedStatusNote({ record: remaining, provider, dependencies })
+        await updateQueuedStatusNote({ project, record: remaining, provider, dependencies })
         return
-      }
-
-      if (project.review.fix.enabled && !remaining?.runningEvent && !remaining?.pendingEvent) {
-        const { ensureFixBatchRunner } = await import('@/server/fix-batch-runner')
-        await ensureFixBatchRunner({
-          mastra,
-          project,
-          mrIid: job.mrIid,
-          dependencies: { enqueueMrReview },
-        })
       }
     }
   } catch (error) {
@@ -561,9 +501,10 @@ export const enqueueMrReview = async (params: {
   project: ProjectConfig
   payload: unknown
   event: MrReviewRequestEvent
+  commitSha: string | null
   dependencies?: Partial<ReviewQueueDependencies>
 }): Promise<void> => {
-  const { mastra, project, payload, event } = params
+  const { mastra, project, payload, event, commitSha } = params
   const dependencies = { ...defaultDependencies, ...params.dependencies }
   const provider = dependencies.createReviewProvider(project)
   const key = mrLockKey(event.projectKey, event.mrIid)
@@ -571,7 +512,6 @@ export const enqueueMrReview = async (params: {
   const result: { ignored: true } | { ignored: false; record: ReviewQueueRecord } =
     await withMrLock(key, async () => {
       const existing = await dependencies.getReviewQueueRecord(event.projectKey, event.mrIid)
-      const commitSha = extractWebhookCommitSha(payload)
 
       if (hasRunningReviewForSha(existing, commitSha)) {
         return {
@@ -597,6 +537,7 @@ export const enqueueMrReview = async (params: {
       }
 
       await updateQueuedStatusNote({
+        project,
         record: queuedRecord,
         provider,
         dependencies,

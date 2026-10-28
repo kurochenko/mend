@@ -9,6 +9,7 @@ import {
   type MrWebhookPayload,
   type WebhookPayload,
 } from '@/server/gitlab-webhook'
+import { verifyGitlabSignature } from '@/server/webhook-auth'
 
 const makeProject = (overrides: Partial<GitLabProjectConfig> = {}): GitLabProjectConfig => ({
   key: 'test-project',
@@ -24,26 +25,14 @@ const makeProject = (overrides: Partial<GitLabProjectConfig> = {}): GitLabProjec
   review: {
     llm: { model: 'test-model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'test-model',
-      thinking_level: 'minimal',
-      timeout_ms: 45000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
   },
   tools: { context7: {} },
   ...overrides,
@@ -72,13 +61,22 @@ const makeMrPayload = (
     action: overrides.action ?? 'open',
     draft: overrides.draft ?? false,
     url: 'https://gitlab.example.com/test/-/merge_requests/42',
+    last_commit: { id: 'abc123' },
   },
   labels: overrides.labels,
   changes: overrides.changes,
 })
 
 const makeNotePayload = (
-  overrides: { noteableType?: string; hasMr?: boolean; noteId?: number } = {},
+  overrides: {
+    noteableType?: string
+    hasMr?: boolean
+    noteId?: number
+    action?: string
+    system?: boolean
+    type?: string | null
+    discussionId?: string
+  } = {},
 ): WebhookPayload => ({
   object_kind: 'note' as const,
   project: { id: 1, name: 'test', web_url: 'https://gitlab.example.com/test' },
@@ -87,8 +85,10 @@ const makeNotePayload = (
     id: overrides.noteId ?? 99,
     note: 'Some comment',
     noteable_type: overrides.noteableType ?? 'MergeRequest',
-    type: null,
-    action: 'create',
+    type: overrides.type ?? null,
+    action: overrides.action ?? 'create',
+    system: overrides.system,
+    discussion_id: overrides.discussionId,
   },
   ...(overrides.hasMr !== false ? { merge_request: { iid: 42 } } : {}),
 })
@@ -105,6 +105,7 @@ describe('classifyWebhook', () => {
       if (result.type === 'mr_review_requested') {
         expect(result.mrIid).toBe(42)
         expect(result.projectKey).toBe('test-project')
+        expect(result.headSha).toBe('abc123')
       }
     })
 
@@ -170,6 +171,18 @@ describe('classifyWebhook', () => {
     })
   })
 
+  describe('trigger actions', () => {
+    test('mode=all ignores non-push MR actions such as approvals', () => {
+      const project = makeProject({ trigger: { mode: 'all' } })
+      const payload = makeMrPayload({ action: 'approved', draft: false, state: 'opened' })
+
+      expect(classifyWebhook(project, payload)).toEqual({
+        type: 'ignored',
+        reason: 'action "approved"',
+      })
+    })
+  })
+
   describe('note events', () => {
     test('note event on MR -> mr_note_received', () => {
       const project = makeProject()
@@ -177,11 +190,45 @@ describe('classifyWebhook', () => {
 
       const result = classifyWebhook(project, payload)
 
-      expect(result.type).toBe('mr_note_received')
-      if (result.type === 'mr_note_received') {
-        expect(result.mrIid).toBe(42)
-        expect(result.noteId).toBe(99)
-      }
+      expect(result).toEqual({
+        type: 'mr_note_received',
+        projectKey: 'test-project',
+        projectId: 1,
+        note: {
+          mrIid: 42,
+          noteId: 99,
+          body: 'Some comment',
+          author: { id: 2, username: 'reviewer' },
+          discussionId: undefined,
+          isDiffNote: false,
+          url: undefined,
+          createdAt: undefined,
+          updatedAt: undefined,
+        },
+      })
+    })
+
+    test('diff note keeps its discussion id', () => {
+      const payload = makeNotePayload({ type: 'DiffNote', discussionId: 'discussion-abc' })
+
+      const result = classifyWebhook(makeProject(), payload)
+
+      expect(result).toMatchObject({
+        type: 'mr_note_received',
+        note: { isDiffNote: true, discussionId: 'discussion-abc' },
+      })
+    })
+
+    test('system note → ignored', () => {
+      const result = classifyWebhook(makeProject(), makeNotePayload({ system: true }))
+
+      expect(result).toEqual({ type: 'ignored', reason: 'system note' })
+    })
+
+    test('edited note → ignored', () => {
+      const result = classifyWebhook(makeProject(), makeNotePayload({ action: 'update' }))
+
+      expect(result).toEqual({ type: 'ignored', reason: 'note action "update"' })
     })
 
     test('note event not on MR → ignored', () => {
@@ -240,7 +287,6 @@ describe('extractMrLabels', () => {
 
 describe('gitlab webhook route authentication', () => {
   const signingKey = Buffer.from('test-signing-key')
-  const signingToken = `whsec_${signingKey.toString('base64')}`
   const body = JSON.stringify(makeMrPayload({ draft: true }))
   const messageId = 'msg_1'
 
@@ -264,7 +310,7 @@ describe('gitlab webhook route authentication', () => {
   test('accepts a valid signature when a signing token is configured', async () => {
     const res = await post(
       signedHeaders(nowTimestamp()),
-      makeProject({ webhook_signing_token: signingToken }),
+      makeProject({ webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(200)
@@ -275,7 +321,7 @@ describe('gitlab webhook route authentication', () => {
     const timestamp = nowTimestamp()
     const res = await post(
       signedHeaders(timestamp, `v1,bogus ${sign(timestamp)}`),
-      makeProject({ webhook_signing_token: signingToken }),
+      makeProject({ webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(200)
@@ -285,7 +331,7 @@ describe('gitlab webhook route authentication', () => {
     const timestamp = nowTimestamp()
     const res = await post(
       signedHeaders(timestamp, sign(timestamp, '{"tampered":true}')),
-      makeProject({ webhook_signing_token: signingToken }),
+      makeProject({ webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(401)
@@ -293,10 +339,7 @@ describe('gitlab webhook route authentication', () => {
 
   test('rejects a stale timestamp', async () => {
     const stale = String(Math.floor(Date.now() / 1000) - 600)
-    const res = await post(
-      signedHeaders(stale),
-      makeProject({ webhook_signing_token: signingToken }),
-    )
+    const res = await post(signedHeaders(stale), makeProject({ webhook_signing_token: signingKey }))
 
     expect(res.status).toBe(401)
   })
@@ -304,7 +347,7 @@ describe('gitlab webhook route authentication', () => {
   test('does not fall back to the secret token when a signature is present but invalid', async () => {
     const res = await post(
       { ...signedHeaders(nowTimestamp(), 'v1,bogus'), 'X-Gitlab-Token': 'secret' },
-      makeProject({ webhook_signing_token: signingToken }),
+      makeProject({ webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(401)
@@ -313,7 +356,7 @@ describe('gitlab webhook route authentication', () => {
   test('rejects a stripped signature even with a valid secret token', async () => {
     const res = await post(
       { 'X-Gitlab-Token': 'secret' },
-      makeProject({ webhook_signing_token: signingToken }),
+      makeProject({ webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(401)
@@ -322,7 +365,7 @@ describe('gitlab webhook route authentication', () => {
   test('accepts a valid signature when no secret token is configured', async () => {
     const res = await post(
       signedHeaders(nowTimestamp()),
-      makeProject({ webhook_secret: undefined, webhook_signing_token: signingToken }),
+      makeProject({ webhook_secret: undefined, webhook_signing_token: signingKey }),
     )
 
     expect(res.status).toBe(200)
@@ -338,6 +381,48 @@ describe('gitlab webhook route authentication', () => {
     const res = await post({ 'X-Gitlab-Token': 'wrong' })
 
     expect(res.status).toBe(401)
+  })
+})
+
+describe('verifyGitlabSignature', () => {
+  const standardWebhooksVector = {
+    signingKey: Buffer.from('MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw', 'base64'),
+    messageId: 'msg_p5jXN8AQM9LWM0D4loKWxJek',
+    timestamp: '1614265330',
+    signatures: 'v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=',
+    rawBody: '{"test": 2432232314}',
+    nowSeconds: 1614265330,
+  }
+
+  test('accepts the Standard Webhooks reference signature', () => {
+    expect(verifyGitlabSignature(standardWebhooksVector)).toBeNull()
+  })
+
+  test('rejects a timestamp too far in the future', () => {
+    expect(verifyGitlabSignature({ ...standardWebhooksVector, nowSeconds: 1614265330 - 301 })).toBe(
+      'invalid_timestamp',
+    )
+  })
+
+  test('rejects a non-integer timestamp', () => {
+    expect(verifyGitlabSignature({ ...standardWebhooksVector, timestamp: '1614265330.5' })).toBe(
+      'invalid_timestamp',
+    )
+  })
+
+  test.each(['messageId', 'timestamp', 'signatures'] as const)(
+    'rejects a request missing %s',
+    (field) => {
+      expect(verifyGitlabSignature({ ...standardWebhooksVector, [field]: undefined })).toBe(
+        'missing_signature_headers',
+      )
+    },
+  )
+
+  test('rejects a tampered body', () => {
+    expect(
+      verifyGitlabSignature({ ...standardWebhooksVector, rawBody: '{"test": 2432232315}' }),
+    ).toBe('signature_mismatch')
   })
 })
 
@@ -375,7 +460,7 @@ describe('gitlab webhook route logging', () => {
 
     expect(res.status).toBe(200)
     expect(loggedLines()).toEqual([
-      '[webhook] test-project "Merge Request Hook" 200 ignored MR !42: action "update\\n[webhook] forged", draft=false',
+      '[webhook] test-project "Merge Request Hook" 200 ignored MR !42: action "update\\n[webhook] forged"',
     ])
   })
 
@@ -404,7 +489,9 @@ describe('gitlab webhook route logging', () => {
     const res = await post(JSON.stringify(makeMrPayload()), { 'X-Gitlab-Token': 'wrong-token' })
 
     expect(res.status).toBe(401)
-    expect(loggedLines()).toEqual(['[webhook] test-project "Merge Request Hook" 401 unauthorized'])
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Merge Request Hook" 401 unauthorized (token_mismatch)',
+    ])
     expect(loggedLines().join('\n')).not.toContain('wrong-token')
   })
 

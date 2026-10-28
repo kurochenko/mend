@@ -6,8 +6,6 @@ interface OutputResult {
   assessment?: string
   findings?: unknown[]
   inlineComments?: unknown[]
-  reviewTemplateId?: string
-  reviewTemplateSource?: string
   skipped?: number
 }
 
@@ -15,11 +13,17 @@ const printUsage = (): void => {
   console.log('Usage: bun run runs')
   console.log('   or: bun run runs <project-key>')
   console.log('   or: bun run runs <project-key> <mr-iid>')
+  console.log('   or: bun run runs --help')
 }
 
+type RunsCommand =
+  | { kind: 'help' }
+  | { kind: 'invalid' }
+  | { kind: 'list'; projectKey?: string; mrIid?: number }
+
 const parseMrIid = (value: string): number => {
-  const parsed = Number.parseInt(value, 10)
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = /^\d+$/.test(value) ? Number(value) : Number.NaN
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid mr-iid: ${value}`)
   }
   return parsed
@@ -64,18 +68,28 @@ const extractResult = (value: unknown): OutputResult => {
     assessment: typeof record.assessment === 'string' ? record.assessment : undefined,
     findings: Array.isArray(record.findings) ? record.findings : undefined,
     inlineComments: Array.isArray(record.inlineComments) ? record.inlineComments : undefined,
-    reviewTemplateId:
-      typeof record.reviewTemplateId === 'string' ? record.reviewTemplateId : undefined,
-    reviewTemplateSource:
-      typeof record.reviewTemplateSource === 'string' ? record.reviewTemplateSource : undefined,
     skipped: typeof record.skipped === 'number' ? record.skipped : undefined,
   }
 }
 
-const printRows = (rows: ReviewRunRecord[]): void => {
+export const parseRunsArgs = (args: string[]): RunsCommand => {
+  if (args.includes('--help') || args.includes('-h')) {
+    return { kind: 'help' }
+  }
+  if (args.length > 2 || args.some((arg) => arg.startsWith('-'))) {
+    return { kind: 'invalid' }
+  }
+  const [projectKey, rawMrIid] = args
+  return {
+    kind: 'list',
+    projectKey,
+    mrIid: rawMrIid === undefined ? undefined : parseMrIid(rawMrIid),
+  }
+}
+
+export const formatRunsTable = (rows: ReviewRunRecord[]): string[] => {
   if (rows.length === 0) {
-    console.log('No runs found.')
-    return
+    return ['No runs found.']
   }
 
   const header = [
@@ -85,40 +99,43 @@ const printRows = (rows: ReviewRunRecord[]): void => {
     truncate('MODEL', 30),
     truncate('STATUS', 8),
     truncate('ASSESSMENT', 16),
-    truncate('TEMPLATE', 18),
-    truncate('SRC', 10),
+    truncate('SRC', 16),
     truncate('FINDINGS', 8),
     truncate('INLINE', 8),
     truncate('SKIPPED', 8),
     truncate('DURATION', 9),
     truncate('CREATED', 22),
   ].join('  ')
-  console.log(header)
 
-  for (const row of rows) {
-    const result = extractResult(row.result)
-    const line = [
-      truncate(row.id, 36),
-      truncate(`${row.projectKey}!${row.mrIid}`, 18),
-      truncate(shortSha(row.commitSha), 10),
-      truncate(row.model, 30),
-      truncate(row.status, 8),
-      truncate(result.assessment ?? '-', 16),
-      truncate(result.reviewTemplateId ?? '-', 18),
-      truncate(result.reviewTemplateSource ?? '-', 10),
-      truncate(result.findings ? String(result.findings.length) : '-', 8),
-      truncate(result.inlineComments ? String(result.inlineComments.length) : '-', 8),
-      truncate(result.skipped !== undefined ? String(result.skipped) : '-', 8),
-      truncate(formatDuration(row.durationMs), 9),
-      truncate(formatTimestamp(row.createdAt), 22),
-    ].join('  ')
-    console.log(line)
-  }
+  return [
+    header,
+    ...rows.map((row) => {
+      const result = extractResult(row.result)
+      return [
+        truncate(row.id, 36),
+        truncate(`${row.projectKey}!${row.mrIid}`, 18),
+        truncate(shortSha(row.commitSha), 10),
+        truncate(row.model, 30),
+        truncate(row.status, 8),
+        truncate(result.assessment ?? '-', 16),
+        truncate(row.source, 16),
+        truncate(result.findings ? String(result.findings.length) : '-', 8),
+        truncate(result.inlineComments ? String(result.inlineComments.length) : '-', 8),
+        truncate(result.skipped !== undefined ? String(result.skipped) : '-', 8),
+        truncate(formatDuration(row.durationMs), 9),
+        truncate(formatTimestamp(row.createdAt), 22),
+      ].join('  ')
+    }),
+  ]
 }
 
 const main = async (): Promise<void> => {
-  const args = Bun.argv.slice(2)
-  if (args.length > 2) {
+  const command = parseRunsArgs(Bun.argv.slice(2))
+  if (command.kind === 'help') {
+    printUsage()
+    return
+  }
+  if (command.kind === 'invalid') {
     printUsage()
     process.exitCode = 1
     return
@@ -127,23 +144,24 @@ const main = async (): Promise<void> => {
   const config = loadConfig()
   await initDb(config.env.DATABASE_URL)
 
-  const projectKey = args[0]
-  const mrIid = args[1] ? parseMrIid(args[1]) : undefined
-
   const rows = await listReviewRuns({
-    projectKey,
-    mrIid,
+    projectKey: command.projectKey,
+    mrIid: command.mrIid,
     limit: 50,
   })
 
-  printRows(rows)
+  for (const line of formatRunsTable(rows)) {
+    console.log(line)
+  }
 }
 
-main()
-  .catch((error) => {
-    console.error(error)
-    process.exitCode = 1
-  })
-  .finally(async () => {
-    await closeDb()
-  })
+if (import.meta.main) {
+  main()
+    .catch((error) => {
+      console.error(error)
+      process.exitCode = 1
+    })
+    .finally(async () => {
+      await closeDb()
+    })
+}

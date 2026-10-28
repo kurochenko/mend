@@ -9,6 +9,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3147),
   DATABASE_URL: z.string().default('postgres://mend:mend@localhost:5434/mend'),
   PROJECTS_CONFIG: z.string().default('mend.yml'),
+  DASHBOARD_TOKEN: z.string().min(32, 'DASHBOARD_TOKEN must be at least 32 characters').optional(),
   RECORD_WEBHOOKS: z
     .enum(['0', '1', 'true', 'false'])
     .default('0')
@@ -16,11 +17,6 @@ const envSchema = z.object({
 })
 
 export type EnvConfig = z.infer<typeof envSchema>
-
-const defaultIntentModels = {
-  pi: 'openai-codex/gpt-6-luna',
-  codex: 'gpt-6-luna',
-} as const
 
 const triggerSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ready') }),
@@ -83,101 +79,11 @@ const reviewAgentSchema = z.preprocess(
   }),
 )
 
-const fixerAgentSchema = z.preprocess(
-  (value) => value ?? {},
-  z.object({
-    harness: z.literal('codex').default('codex'),
-    model: z.string().min(1).optional(),
-    thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).optional(),
-    timeout_ms: z.number().int().positive().optional(),
-  }),
-)
-
 const reviewMemorySchema = z.preprocess(
   (value) => value ?? {},
   z.object({
     project_scope_usernames: z.array(z.string().min(1)).default([]),
   }),
-)
-
-const reviewTriageSchema = z.preprocess(
-  (value) => value ?? {},
-  z.object({
-    trusted_usernames: z.array(z.string().min(1)).default([]),
-  }),
-)
-
-const scalarConfigValueSchema = z.union([z.string(), z.number(), z.boolean()])
-const workspaceEnvNameSchema = z
-  .string()
-  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'workspace env name must be a valid shell variable name')
-
-const workspaceEnvValueSchema = z.union([
-  scalarConfigValueSchema,
-  z.object({ value: scalarConfigValueSchema }),
-  z.object({ from_env: z.string().min(1) }),
-])
-
-const unsafeMountSources = new Set(['/', '/var/run/docker.sock'])
-
-const isSafeWorkspaceMountSource = (value: string): boolean => {
-  const source = resolve(value)
-  const home = process.env.HOME ? resolve(process.env.HOME) : null
-
-  if (unsafeMountSources.has(source)) {
-    return false
-  }
-
-  if (home && (source === home || source.startsWith(`${home}/`))) {
-    return false
-  }
-
-  return true
-}
-
-const workspaceMountSchema = z
-  .object({
-    source: z.string().min(1),
-    target: z
-      .string()
-      .min(1)
-      .refine((value) => value.startsWith('/'), 'mount target must be an absolute container path'),
-    read_only: z.boolean().default(true),
-  })
-  .refine((mount) => isSafeWorkspaceMountSource(mount.source), {
-    message: 'mount source must not be a host home directory, root, or Docker socket',
-    path: ['source'],
-  })
-
-const dockerFixWorkspaceSchema = z.object({
-  provider: z.literal('docker'),
-  image: z.string().min(1),
-  network: z.string().min(1).default('none'),
-  env: z.record(workspaceEnvNameSchema, workspaceEnvValueSchema).default({}),
-  mounts: z.array(workspaceMountSchema).default([]),
-  setup: z.array(z.string().min(1)).default([]),
-  checks: z.array(z.string().min(1)).default([]),
-})
-
-const reviewFixSchema = z.preprocess(
-  (value) => value ?? {},
-  z
-    .object({
-      enabled: z.boolean().default(false),
-      automatic: z.boolean().default(false),
-      agent: fixerAgentSchema.optional(),
-      max_loops: z.number().int().positive().default(3),
-      workspace: dockerFixWorkspaceSchema.optional(),
-    })
-    .superRefine((fix, ctx) => {
-      if ((fix.enabled || fix.automatic) && !fix.workspace) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'review.fix.workspace is required when the fix loop is enabled',
-          path: ['workspace'],
-        })
-      }
-    }),
 )
 
 const reviewSchema = z.object({
@@ -186,41 +92,16 @@ const reviewSchema = z.object({
     thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('medium'),
   }),
   agent: reviewAgentSchema,
-  template: z
-    .object({
-      prompt: z
-        .enum(['auto', 'style_refactor', 'feature', 'bugfix', 'security_sensitive', 'mixed'])
-        .default('auto'),
-      label_prefix: z.string().default('ai-review:'),
-    })
-    .prefault({}),
   flags: z
     .object({
-      prompt_templates_v2: z.boolean().default(true),
-      schema_v2: z.boolean().default(true),
       structured_findings_post: z.boolean().default(true),
       structural_signals: z.boolean().default(true),
       bug_history: z.boolean().default(true),
       dry_run: z.boolean().default(false),
     })
     .prefault({}),
-  intent: z
-    .object({
-      harness: z.enum(['pi', 'codex']).default('codex'),
-      model: z.string().optional(),
-      thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('minimal'),
-      timeout_ms: z.number().int().positive().default(45_000),
-      failure_policy: z.enum(['mixed', 'fail']).default('mixed'),
-    })
-    .transform((intent) => ({
-      ...intent,
-      model: intent.model ?? defaultIntentModels[intent.harness],
-    }))
-    .prefault({}),
   comparison: comparisonSchema,
   memory: reviewMemorySchema,
-  triage: reviewTriageSchema,
-  fix: reviewFixSchema,
 })
 
 const sharedProjectSchema = z.object({
@@ -238,7 +119,8 @@ const gitlabProjectSchema = sharedProjectSchema.extend({
   webhook_secret: z.string().min(1).optional(),
   webhook_signing_token: z
     .string()
-    .regex(/^whsec_.+/, 'must start with whsec_')
+    .regex(/^whsec_[A-Za-z0-9+/]+={0,2}$/, 'must be whsec_ followed by a base64 key')
+    .transform((token) => Buffer.from(token.slice('whsec_'.length), 'base64'))
     .optional(),
   project_id: z.union([z.number().int().positive(), z.string().min(1)]),
 })
@@ -338,6 +220,86 @@ let _config: AppConfig | null = null
 export const parseProjectsFileConfig = (parsed: unknown): ProjectsFileConfig =>
   projectsFileSchema.parse(resolveEnvRefsDeep(parsed))
 
+export const parseProjectsFileConfigOrExplain = (
+  configPath: string,
+  parsed: unknown,
+): ProjectsFileConfig => {
+  try {
+    return parseProjectsFileConfig(parsed)
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new Error(`Invalid ${configPath}:\n${z.prettifyError(error)}`, { cause: error })
+    }
+    throw error
+  }
+}
+
+const REMOVED_REVIEW_SETTINGS: Record<string, string> = {
+  fix: 'the fix loop was removed; Mend only reviews',
+  triage: '@mend triage commands were removed',
+  intent: 'the intent classifier was removed',
+  template: 'review templates were removed',
+}
+
+const REMOVED_REVIEW_FLAGS: Record<string, string> = {
+  prompt_templates_v2: 'review templates were removed',
+  schema_v2: 'schema v2 is always used',
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+
+export const findRemovedSettings = (parsed: unknown): string[] =>
+  Object.entries(asRecord(asRecord(parsed)?.projects) ?? {}).flatMap(([key, project]) => {
+    const review = asRecord(asRecord(project)?.review) ?? {}
+    const flags = asRecord(review.flags) ?? {}
+    const removed = (
+      settings: Record<string, string>,
+      present: Record<string, unknown>,
+      prefix: string,
+    ): string[] =>
+      Object.entries(settings)
+        .filter(([setting]) => setting in present)
+        .map(
+          ([setting, reason]) =>
+            `projects.${key}.${prefix}${setting} is no longer used and is ignored (${reason}); remove it from your config`,
+        )
+    return [
+      ...removed(REMOVED_REVIEW_SETTINGS, review, 'review.'),
+      ...removed(REMOVED_REVIEW_FLAGS, flags, 'review.flags.'),
+    ]
+  })
+
+export const withoutRemovedSettings = (parsed: unknown): unknown => {
+  const projects = asRecord(asRecord(parsed)?.projects)
+  if (!projects) {
+    return parsed
+  }
+  return {
+    ...asRecord(parsed),
+    projects: Object.fromEntries(
+      Object.entries(projects).map(([key, project]) => {
+        const review = asRecord(asRecord(project)?.review)
+        if (!review) {
+          return [key, project]
+        }
+        const keptReview = Object.fromEntries(
+          Object.entries(review).filter(([setting]) => !(setting in REMOVED_REVIEW_SETTINGS)),
+        )
+        const flags = asRecord(review.flags)
+        if (flags) {
+          keptReview.flags = Object.fromEntries(
+            Object.entries(flags).filter(([flag]) => !(flag in REMOVED_REVIEW_FLAGS)),
+          )
+        }
+        return [key, { ...asRecord(project), review: keptReview }]
+      }),
+    ),
+  }
+}
+
 export const loadConfig = (): AppConfig => {
   if (_config) {
     return _config
@@ -345,9 +307,14 @@ export const loadConfig = (): AppConfig => {
 
   const env = envSchema.parse(process.env)
 
-  const raw = readFileSync(env.PROJECTS_CONFIG, 'utf-8')
-  const parsed = parseYaml(raw)
-  const validated = parseProjectsFileConfig(parsed)
+  const parsed: unknown = parseYaml(readFileSync(env.PROJECTS_CONFIG, 'utf-8'))
+  const validated = parseProjectsFileConfigOrExplain(
+    env.PROJECTS_CONFIG,
+    withoutRemovedSettings(parsed),
+  )
+  for (const warning of findRemovedSettings(parsed)) {
+    console.warn(`[config] ${env.PROJECTS_CONFIG}: ${warning}`)
+  }
 
   const projects = new Map<string, ProjectConfig>()
   for (const [key, project] of Object.entries(validated.projects)) {

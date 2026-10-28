@@ -10,10 +10,6 @@ describe('reviewDiagnosticsSchema', () => {
       changedFileCount: 1,
       diffExcerptChars: 100,
       diffTruncated: false,
-      intentClassifierModel: 'classifier-model',
-      intentClassifierDurationMs: 10,
-      intentClassifierFailure: null,
-      intentSecondaryIntents: [],
       inspection: {
         files: [],
         changedFiles: [],

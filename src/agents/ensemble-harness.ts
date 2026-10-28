@@ -290,6 +290,18 @@ const replaceResolutionInstructions = (instructions: string): string =>
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
+const VERIFIER_ROLE_INSTRUCTION =
+  'You are verifying one candidate finding, not writing a review. The MR context above is background only: do not produce review findings, inline comments, or resolution verdicts. Answer only in the verdict JSON format requested in the user message.'
+
+export const buildVerifierInstructions = (baseInstructions: string): string =>
+  [
+    stripOutputSchemaSection(baseInstructions)
+      .replace(RESOLUTION_INSTRUCTIONS, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
+    VERIFIER_ROLE_INSTRUCTION,
+  ].join('\n\n')
+
 export const buildFinderInstructions = (baseInstructions: string): string =>
   replaceResolutionInstructions(
     replaceOutputSchemaSection(baseInstructions, reducedFinderSchemaSection),
@@ -543,8 +555,11 @@ const candidateFiles = (candidate: EnsembleCandidate): string[] => {
   return [...files].sort((left, right) => left.localeCompare(right))
 }
 
-const diffContextForCandidate = (basePrompt: string, candidate: EnsembleCandidate): string => {
-  const diffByFile = splitDiffByFile(extractDiffSection(basePrompt))
+const diffContextForCandidate = (
+  reviewInstructions: string,
+  candidate: EnsembleCandidate,
+): string => {
+  const diffByFile = splitDiffByFile(extractDiffSection(reviewInstructions))
   const fileBlocks = candidateFiles(candidate)
     .map((file) => {
       const block = diffByFile.get(file)
@@ -553,14 +568,14 @@ const diffContextForCandidate = (basePrompt: string, candidate: EnsembleCandidat
     .filter((block): block is string => block !== null)
 
   if (fileBlocks.length === 0) {
-    return 'No matching per-file diff hunks were found in the base prompt. Read the cited code with tools if needed.'
+    return 'No matching per-file diff hunks were found in the review instructions. Read the cited code with tools if needed.'
   }
 
   return fileBlocks.join('\n\n')
 }
 
 export const buildVerifierPrompt = (input: {
-  basePrompt: string
+  reviewInstructions: string
   candidate: EnsembleCandidate
 }): string =>
   [
@@ -588,7 +603,7 @@ export const buildVerifierPrompt = (input: {
     '',
     'Relevant diff hunks:',
     '```diff',
-    diffContextForCandidate(input.basePrompt, input.candidate),
+    diffContextForCandidate(input.reviewInstructions, input.candidate),
     '```',
   ].join('\n')
 
@@ -854,8 +869,9 @@ const invokeVerifierCandidate = async (input: {
       sessionDir: join(input.config.sessionDir, 'ensemble', `verify-${input.index + 1}`),
       model: input.ensembleConfig.verifier_model,
       thinkingLevel: input.ensembleConfig.verifier_thinking_level,
+      instructions: buildVerifierInstructions(input.config.instructions),
       prompt: buildVerifierPrompt({
-        basePrompt: input.config.prompt,
+        reviewInstructions: input.config.instructions,
         candidate: input.candidate,
       }),
       timeoutMs: input.ensembleConfig.verifier_timeout_ms,

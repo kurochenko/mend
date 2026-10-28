@@ -19,20 +19,30 @@ export const getServiceRuntimeMode = async (): Promise<ServiceRuntimeMode> => {
   return row?.mode ?? 'running'
 }
 
-export const setServiceRuntimeMode = async (mode: ServiceRuntimeMode): Promise<void> => {
+export type ServiceDrainOwner = 'operator'
+
+export const setServiceRuntimeMode = async (
+  mode: ServiceRuntimeMode,
+  drainedBy: ServiceDrainOwner | null = null,
+): Promise<void> => {
   const db = getDb()
+  const values = { mode, drainedBy: mode === 'draining' ? drainedBy : null, updatedAt: new Date() }
   await db
     .insert(serviceRuntime)
-    .values({
-      id: RUNTIME_ID,
-      mode,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: serviceRuntime.id,
-      set: {
-        mode,
-        updatedAt: new Date(),
-      },
-    })
+    .values({ id: RUNTIME_ID, ...values })
+    .onConflictDoUpdate({ target: serviceRuntime.id, set: values })
+}
+
+export const clearLeftoverShutdownDrain = async (): Promise<boolean> => {
+  const db = getDb()
+  const [row] = await db
+    .select({ mode: serviceRuntime.mode, drainedBy: serviceRuntime.drainedBy })
+    .from(serviceRuntime)
+    .where(eq(serviceRuntime.id, RUNTIME_ID))
+    .limit(1)
+  if (row?.mode !== 'draining' || row.drainedBy === 'operator') {
+    return false
+  }
+  await setServiceRuntimeMode('running')
+  return true
 }

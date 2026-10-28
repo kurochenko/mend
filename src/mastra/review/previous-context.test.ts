@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
+import * as actualReviewRunsModule from '@/db/review-runs'
+import * as actualReviewFindingsModule from '@/db/review-findings'
+import * as actualReviewThreadsModule from '@/db/review-threads'
+import * as actualReviewMemoryModule from '@/db/review-memory'
+import * as actualClientModule from '@/integrations/provider/client'
 
 const mockGetReviewRun = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve(null))
 const mockListReviewThreadsForRun = mock<(...args: unknown[]) => Promise<unknown[]>>(() =>
@@ -23,6 +28,12 @@ const mockCreateReviewMemoryEntry = mock<(...args: unknown[]) => Promise<unknown
 const mockArchiveActiveThreadResolvedMemoryForThread = mock(() => Promise.resolve())
 const mockListThreads = mock<(...args: unknown[]) => Promise<unknown[]>>(() => Promise.resolve([]))
 
+const actualReviewRuns = { ...actualReviewRunsModule }
+const actualReviewFindings = { ...actualReviewFindingsModule }
+const actualReviewThreads = { ...actualReviewThreadsModule }
+const actualReviewMemory = { ...actualReviewMemoryModule }
+const actualClient = { ...actualClientModule }
+
 mock.module('@/db/review-runs', () => ({
   getReviewRun: mockGetReviewRun,
 }))
@@ -31,9 +42,7 @@ mock.module('@/db/review-findings', () => ({
   listReviewFindingsForMr: mockListReviewFindingsForMr,
   upsertReviewFinding: mock(() => Promise.resolve(null)),
   getReviewFindingByProviderThreadId: mock(() => Promise.resolve(null)),
-  getReviewFindingByThreadId: mock(() => Promise.resolve(null)),
   updateReviewFindingState: mock(() => Promise.resolve(null)),
-  countReviewFindingsByStateForMr: mock(() => Promise.resolve({})),
   countReviewFindingSeveritiesForMr: mock(() =>
     Promise.resolve({ bug: 0, security: 0, performance: 0, suggestion: 0 }),
   ),
@@ -145,25 +154,12 @@ const makePostResult = (overrides: Record<string, unknown> = {}) => ({
   reviewMode: 'initial',
   previousReviewedSha: null,
   previousRunId: null,
-  reviewIntent: 'feature',
-  reviewIntentConfidence: 0.9,
-  reviewIntentRationale: ['feature term in title'],
-  reviewTemplateId: 'feature',
-  reviewTemplateSource: 'classifier',
   assessment: 'needs_discussion',
   summary: 'summary',
   findings: [],
   inlineComments: [],
   resolutionVerdicts: [],
-  meta: {
-    templateId: 'feature',
-    intent: 'feature',
-    confidence: 0.9,
-    selectionSource: 'classifier',
-  },
   featureFlags: {
-    promptTemplatesV2: true,
-    schemaV2: true,
     structuredFindingsPost: true,
     structuralSignals: true,
     bugHistory: true,
@@ -176,10 +172,6 @@ const makePostResult = (overrides: Record<string, unknown> = {}) => ({
     changedFileCount: 1,
     diffExcerptChars: 100,
     diffTruncated: false,
-    intentClassifierModel: 'test-model',
-    intentClassifierDurationMs: 1,
-    intentClassifierFailure: null,
-    intentSecondaryIntents: [],
     agent: {
       harness: 'pi',
       model: 'test-model',
@@ -260,11 +252,6 @@ describe('buildPreviousReviewContext', () => {
           reviewMode: 'initial',
           previousReviewedSha: null,
           previousRunId: null,
-          reviewIntent: 'feature',
-          reviewIntentConfidence: 0.9,
-          reviewIntentRationale: ['feature term in title'],
-          reviewTemplateId: 'feature',
-          reviewTemplateSource: 'classifier',
           assessment: 'needs_discussion',
           summary: 'summary',
           findings: [
@@ -296,15 +283,7 @@ describe('buildPreviousReviewContext', () => {
             },
           ],
           resolutionVerdicts: [],
-          meta: {
-            templateId: 'feature',
-            intent: 'feature',
-            confidence: 0.9,
-            selectionSource: 'classifier',
-          },
           featureFlags: {
-            promptTemplatesV2: true,
-            schemaV2: true,
             structuredFindingsPost: true,
             structuralSignals: true,
             bugHistory: true,
@@ -317,10 +296,6 @@ describe('buildPreviousReviewContext', () => {
             changedFileCount: 2,
             diffExcerptChars: 100,
             diffTruncated: false,
-            intentClassifierModel: 'test-model',
-            intentClassifierDurationMs: 1,
-            intentClassifierFailure: null,
-            intentSecondaryIntents: [],
             agent: {
               harness: 'pi',
               model: 'test-model',
@@ -1119,4 +1094,12 @@ describe('buildPreviousReviewContext', () => {
       }),
     )
   })
+})
+
+afterAll(() => {
+  mock.module('@/db/review-runs', () => actualReviewRuns)
+  mock.module('@/db/review-findings', () => actualReviewFindings)
+  mock.module('@/db/review-threads', () => actualReviewThreads)
+  mock.module('@/db/review-memory', () => actualReviewMemory)
+  mock.module('@/integrations/provider/client', () => actualClient)
 })

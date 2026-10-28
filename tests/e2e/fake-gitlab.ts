@@ -210,6 +210,17 @@ const routeRequest = async (state: FakeGitLabState, request: Request): Promise<R
     return json(toGitLabMr(state.mr))
   }
 
+  if (request.method === 'GET' && suffix === '/versions') {
+    return json([
+      {
+        id: 1,
+        head_commit_sha: state.mr.diffRefs.head_sha,
+        base_commit_sha: state.mr.diffRefs.base_sha,
+        start_commit_sha: state.mr.diffRefs.start_sha,
+      },
+    ])
+  }
+
   if (request.method === 'GET' && suffix === '/changes') {
     return json({ changes: state.mr.changes })
   }

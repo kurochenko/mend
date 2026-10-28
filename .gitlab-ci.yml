@@ -54,8 +54,10 @@ test:
     - bun run db:test:setup
     - env -u TEST_DATABASE_URL bun test ./src --reporter=junit --reporter-outfile=junit.xml
     - bun test ./src/db/review-findings.test.ts
-    - bun test ./src/db/fix-batches.test.ts
     - bun test ./src/db/improvement-proposals.test.ts
+    - bun test ./src/db/review-runs.test.ts
+    - bun test ./src/db/review-queue.test.ts
+    - bun test ./src/db/service-runtime.test.ts
   artifacts:
     when: always
     reports:

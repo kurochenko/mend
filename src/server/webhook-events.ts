@@ -1,3 +1,15 @@
+export interface ReviewNote {
+  mrIid: number
+  noteId: number
+  body: string
+  author: { id: number; username: string }
+  discussionId?: string
+  isDiffNote: boolean
+  url?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
 export type ReviewWebhookEvent =
   | {
       type: 'mr_review_requested'
@@ -10,40 +22,15 @@ export type ReviewWebhookEvent =
       sourceBranch: string
       targetBranch: string
       url: string
+      headSha: string | null
     }
   | {
       type: 'mr_note_received'
       projectKey: string
       projectId: number
-      mrIid: number
-      noteId: number
+      note: ReviewNote
     }
   | { type: 'ignored'; reason: string }
-
-export interface ReviewNoteEventPayload {
-  project: {
-    id: number | string
-  }
-  user: {
-    id: number
-    username: string
-  }
-  merge_request?: {
-    iid: number
-  }
-  object_attributes: {
-    id: number
-    note: string
-    noteable_type: string
-    type?: string | null
-    discussion_id?: string | null
-    created_at?: string
-    updated_at?: string
-    action?: string
-    url?: string
-    system?: boolean
-  }
-}
 
 export const repoExternalIdForProject = (project: {
   platform: 'gitlab' | 'github'

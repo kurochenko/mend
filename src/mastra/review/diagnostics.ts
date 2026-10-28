@@ -4,8 +4,6 @@ import type { ReviewAgentHarnessId } from '@/agents/review-harness'
 export const reviewAgentHarnessIdSchema = z.enum(['pi', 'codex', 'opencode', 'ensemble'])
 
 export const featureFlagsSchema = z.object({
-  promptTemplatesV2: z.boolean(),
-  schemaV2: z.boolean(),
   structuredFindingsPost: z.boolean(),
   dryRun: z.boolean(),
   structuralSignals: z.boolean().optional().default(true),
@@ -21,12 +19,6 @@ export const reviewDiagnosticsSchema = z.object({
   changedFileCount: z.number().int().nonnegative(),
   diffExcerptChars: z.number().int().nonnegative(),
   diffTruncated: z.boolean(),
-  intentClassifierModel: z.string(),
-  intentClassifierDurationMs: z.number().int().nonnegative(),
-  intentClassifierFailure: z.string().nullable(),
-  intentSecondaryIntents: z.array(
-    z.enum(['style_refactor', 'feature', 'bugfix', 'security_sensitive', 'mixed']),
-  ),
   agent: z
     .object({
       harness: reviewAgentHarnessIdSchema,
@@ -65,10 +57,6 @@ export interface BuildReviewDiagnosticsInput {
   changedFileCount: number
   diffExcerptChars: number
   diffTruncated: boolean
-  intentClassifierModel: string
-  intentClassifierDurationMs: number
-  intentClassifierFailure: string | null
-  intentSecondaryIntents: ReviewDiagnostics['intentSecondaryIntents']
   agentHarness: ReviewAgentHarnessId
   agentModel: string
   templateWarnings: string[]
@@ -81,10 +69,6 @@ export const buildReviewDiagnostics = (input: BuildReviewDiagnosticsInput): Revi
   changedFileCount: input.changedFileCount,
   diffExcerptChars: input.diffExcerptChars,
   diffTruncated: input.diffTruncated,
-  intentClassifierModel: input.intentClassifierModel,
-  intentClassifierDurationMs: input.intentClassifierDurationMs,
-  intentClassifierFailure: input.intentClassifierFailure,
-  intentSecondaryIntents: input.intentSecondaryIntents,
   agent: {
     harness: input.agentHarness,
     model: input.agentModel,

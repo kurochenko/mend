@@ -47,6 +47,7 @@ describe('resolveDiffBaseRef', () => {
           startSha: initialSha,
           headSha,
         },
+        refetchOrigin: async () => {},
       })
 
       expect(result.baseRef).toBe(previousSha)
@@ -79,10 +80,65 @@ describe('resolveDiffBaseRef', () => {
           startSha: initialSha,
           headSha,
         },
+        refetchOrigin: async () => {},
       })
 
       expect(result.baseRef).toBe(initialSha)
       expect(result.warnings.some((warning) => warning.includes('not an ancestor'))).toBe(true)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers the origin tracking ref over a stale local target branch', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'mend-diff-base-'))
+
+    try {
+      const defaultBranch = await initRepo(cwd)
+      await commitFile(cwd, 'file.txt', 'one\n', 'initial')
+      const trackedSha = await commitFile(cwd, 'file.txt', 'two\n', 'advanced target')
+      await execGit(['update-ref', `refs/remotes/origin/${defaultBranch}`, trackedSha], cwd)
+      await execGit(['reset', '--hard', 'HEAD~1'], cwd)
+      const headSha = await execGit(['rev-parse', 'HEAD'], cwd)
+
+      const result = await resolveDiffBaseRef({
+        worktreePath: cwd,
+        reviewMode: 'initial',
+        previousReviewedSha: null,
+        targetBranch: defaultBranch,
+        diffRefs: { baseSha: 'a'.repeat(40), headSha },
+        refetchOrigin: async () => {},
+      })
+
+      expect(result.baseRef).toBe(`refs/remotes/origin/${defaultBranch}`)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('refetches origin and retries when no candidate exists locally', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'mend-diff-base-'))
+
+    try {
+      await initRepo(cwd)
+      const headSha = await commitFile(cwd, 'file.txt', 'one\n', 'initial')
+      let refetchCount = 0
+
+      const result = await resolveDiffBaseRef({
+        worktreePath: cwd,
+        reviewMode: 'initial',
+        previousReviewedSha: null,
+        targetBranch: 'release',
+        diffRefs: { baseSha: 'b'.repeat(40), headSha },
+        refetchOrigin: async () => {
+          refetchCount++
+          await execGit(['update-ref', 'refs/remotes/origin/release', headSha], cwd)
+        },
+      })
+
+      expect(refetchCount).toBe(1)
+      expect(result.baseRef).toBe('refs/remotes/origin/release')
+      expect(result.warnings.some((warning) => warning.includes('fetching origin'))).toBe(true)
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }

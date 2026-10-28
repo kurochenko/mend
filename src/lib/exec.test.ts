@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { assertCommitSha, sanitizeGitEnv } from '@/lib/exec'
+import { assertCommitSha, buildGitConfigEnv, execGit, sanitizeGitEnv } from '@/lib/exec'
 
 describe('sanitizeGitEnv', () => {
   test('strips git identity and repository environment variables', () => {
@@ -29,5 +29,34 @@ describe('assertCommitSha', () => {
     expect(assertCommitSha(sha)).toBe(sha)
     expect(() => assertCommitSha('aaaaaaa')).toThrow('Invalid commit SHA')
     expect(() => assertCommitSha('g'.repeat(40))).toThrow('Invalid commit SHA')
+  })
+})
+
+describe('execGit', () => {
+  test('applies per-call config through the environment and keeps it out of error messages', async () => {
+    const secret = 'Authorization: Basic c2VjcmV0LXRva2Vu'
+
+    expect(
+      await execGit(['config', '--get', 'http.extraHeader'], process.cwd(), {
+        config: { 'http.extraHeader': secret },
+      }),
+    ).toBe(secret)
+
+    const failure = await execGit(
+      ['rev-parse', '--verify', 'refs/heads/mend-missing-ref'],
+      process.cwd(),
+      {
+        config: { 'http.extraHeader': secret },
+      },
+    ).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain(
+      'git rev-parse --verify refs/heads/mend-missing-ref',
+    )
+    expect((failure as Error).message).not.toContain('c2VjcmV0LXRva2Vu')
+  })
+
+  test('builds no environment for an empty config', () => {
+    expect(buildGitConfigEnv({})).toEqual({})
   })
 })

@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'bun:test'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
-import { getFinalAssistantError, invokePiReview } from '@/agents/pi-harness'
+import { getFinalAssistantError, invokePiReview, loadReviewResources } from '@/agents/pi-harness'
 
 type SessionMessage = AgentSession['messages'][number]
 
@@ -54,6 +57,19 @@ describe('invokePiReview', () => {
       error: 'Pi review aborted before start',
     })
   })
+
+  it('returns a failed result instead of throwing for a malformed model string', async () => {
+    const result = await invokePiReview({
+      cwd: '/tmp',
+      sessionDir: '/tmp/mend-pi-test',
+      model: 'no-provider-prefix',
+      instructions: 'instructions',
+      prompt: 'prompt',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Invalid model string "no-provider-prefix"')
+  })
 })
 
 describe('getFinalAssistantError', () => {
@@ -84,5 +100,54 @@ describe('getFinalAssistantError', () => {
 
   it('returns undefined when there is no assistant response', () => {
     expect(getFinalAssistantError([userMessage('review')])).toBeUndefined()
+  })
+})
+
+describe('loadReviewResources', () => {
+  let tmp: string | undefined
+
+  afterEach(() => {
+    if (tmp) {
+      rmSync(tmp, { recursive: true, force: true })
+      tmp = undefined
+    }
+  })
+
+  it('ignores repo extensions, skills and system prompts, and context files outside the worktree and Pi agent dir', async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'mend-pi-trust-'))
+    const cwd = join(tmp, 'worktree')
+    const agentDir = join(tmp, 'agent')
+    const marker = join(tmp, 'extension-ran')
+    mkdirSync(join(cwd, '.pi/extensions'), { recursive: true })
+    mkdirSync(join(cwd, '.pi/skills/evil'), { recursive: true })
+    mkdirSync(agentDir, { recursive: true })
+    writeFileSync(
+      join(cwd, '.pi/extensions/evil.ts'),
+      `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(marker)}, 'ran')\nexport default () => {}\n`,
+    )
+    writeFileSync(
+      join(cwd, '.pi/skills/evil/SKILL.md'),
+      '---\nname: evil\ndescription: evil\n---\nevil\n',
+    )
+    writeFileSync(join(cwd, '.pi/SYSTEM.md'), 'repo system prompt')
+    writeFileSync(join(cwd, 'AGENTS.md'), 'repo conventions')
+    writeFileSync(join(tmp, 'AGENTS.md'), 'host instructions')
+    writeFileSync(join(agentDir, 'AGENTS.md'), 'operator instructions')
+
+    const { resourceLoader } = await loadReviewResources({
+      cwd,
+      agentDir,
+      instructions: 'mend instructions',
+    })
+
+    expect(existsSync(marker)).toBe(false)
+    expect(resourceLoader.getExtensions().extensions).toEqual([])
+    expect(resourceLoader.getSkills().skills).toEqual([])
+    expect(resourceLoader.getSystemPrompt()).not.toBe('repo system prompt')
+    expect(resourceLoader.getAgentsFiles().agentsFiles.map((file) => file.content)).toEqual([
+      'operator instructions',
+      'repo conventions',
+      'mend instructions',
+    ])
   })
 })

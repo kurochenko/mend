@@ -9,6 +9,7 @@ import {
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from '@sinclair/typebox'
 import { z } from 'zod'
+import { createReadOnlyTools, isInsideRoot } from '@/agents/pi-read-only-tools'
 import { lookupContext7 } from '@/integrations/context7'
 import { toErrorMessage } from '@/lib/errors'
 
@@ -21,7 +22,7 @@ export interface PiReviewConfig {
   prompt: string
   timeoutMs?: number
   context7ApiKey?: string | null
-  toolMode?: 'full' | 'none'
+  toolMode?: 'read-only' | 'none'
   signal?: AbortSignal
 }
 
@@ -74,13 +75,13 @@ const createContext7Tool = (apiKey: string): ToolDefinition => ({
   },
 })
 
-const createReviewCustomTools = (context7ApiKey: string | null | undefined): ToolDefinition[] => {
-  if (!context7ApiKey) {
-    return []
-  }
-
-  return [createContext7Tool(context7ApiKey)]
-}
+const createReviewCustomTools = (config: PiReviewConfig): ToolDefinition[] =>
+  (config.toolMode ?? 'read-only') === 'none'
+    ? []
+    : [
+        ...createReadOnlyTools(config.cwd),
+        ...(config.context7ApiKey ? [createContext7Tool(config.context7ApiKey)] : []),
+      ]
 
 export const getFinalAssistantError = (messages: AgentSession['messages']): string | undefined => {
   const lastAssistant = messages.findLast((message) => message.role === 'assistant')
@@ -126,6 +127,37 @@ const withTimeout = <T>(
   })
 }
 
+export const loadReviewResources = async (params: {
+  cwd: string
+  instructions: string
+  agentDir?: string
+}): Promise<{ settingsManager: SettingsManager; resourceLoader: DefaultResourceLoader }> => {
+  const settingsManager = SettingsManager.inMemory(
+    { compaction: { enabled: false } },
+    { projectTrusted: false },
+  )
+  const agentDir = params.agentDir ?? getAgentDir()
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: params.cwd,
+    agentDir,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    agentsFilesOverride: (discovered) => ({
+      agentsFiles: [
+        ...discovered.agentsFiles.filter(
+          (file) => isInsideRoot(params.cwd, file.path) || isInsideRoot(agentDir, file.path),
+        ),
+        { path: 'review-instructions', content: params.instructions },
+      ],
+    }),
+  })
+  await resourceLoader.reload()
+  return { settingsManager, resourceLoader }
+}
+
 export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewResult> => {
   if (config.signal?.aborted) {
     return {
@@ -137,52 +169,37 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
   }
 
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const toolMode = config.toolMode ?? 'full'
-
-  const modelRuntime = await ModelRuntime.create()
-  const agentDir = getAgentDir()
-
-  const { provider, modelId } = parseModelString(config.model)
-  const model = modelRuntime.getModel(provider, modelId)
-  if (!model) {
-    return {
-      success: false,
-      output: '',
-      sessionFile: undefined,
-      error: `Model not found: ${config.model}`,
-    }
-  }
-
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: false },
-  })
-
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: config.cwd,
-    agentDir,
-    settingsManager,
-    agentsFilesOverride: (discovered) => ({
-      agentsFiles: [
-        ...discovered.agentsFiles,
-        { path: 'review-instructions', content: config.instructions },
-      ],
-    }),
-  })
-  await resourceLoader.reload()
-
-  const sessionManager = SessionManager.create(config.cwd, config.sessionDir)
 
   let session: AgentSession | undefined
   let output = ''
   let abortSession: (() => void) | undefined
 
   try {
+    const { provider, modelId } = parseModelString(config.model)
+    const modelRuntime = await ModelRuntime.create()
+
+    const model = modelRuntime.getModel(provider, modelId)
+    if (!model) {
+      return {
+        success: false,
+        output: '',
+        sessionFile: undefined,
+        error: `Model not found: ${config.model}`,
+      }
+    }
+
+    const { settingsManager, resourceLoader } = await loadReviewResources(config)
+
+    const sessionManager = SessionManager.create(config.cwd, config.sessionDir)
+
+    const customTools = createReviewCustomTools(config)
     const result = await createAgentSession({
       cwd: config.cwd,
       model,
       thinkingLevel: config.thinkingLevel ?? 'medium',
-      noTools: toolMode === 'none' ? 'all' : undefined,
-      customTools: toolMode === 'none' ? [] : createReviewCustomTools(config.context7ApiKey),
+      noTools: 'all',
+      tools: customTools.map((tool) => tool.name),
+      customTools,
       sessionManager,
       settingsManager,
       resourceLoader,

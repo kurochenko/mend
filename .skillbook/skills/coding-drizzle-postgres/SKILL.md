@@ -12,7 +12,7 @@ metadata:
 
 Mend persists to plain Postgres through Drizzle (`drizzle-orm/postgres-js`).
 `src/db/schema.ts` is the table inventory: `review_runs`, `mr_review_queue`,
-`mr_status_notes`, `mr_fix_batches`, `review_threads`, `review_messages`,
+`mr_status_notes`, `review_threads`, `review_messages`,
 `review_findings`, `review_memory_entries`, `review_memory_events`,
 `improvement_proposals`, `service_runtime`. Extend these before inventing a
 parallel table. Mastra's `@mastra/pg` store shares the database and owns its own
@@ -26,7 +26,7 @@ tables; never read or write them from `src/db/`.
   message, or note ID, backed by a unique index.
 - All schema changes go through migrations. No runtime `CREATE`/`ALTER`.
 - Keep schema, Zod IO schemas, and domain types aligned. Export status value
-  arrays next to their `pgEnum` (`fixBatchStatusValues`) and derive types from
+  arrays next to their `pgEnum` (`reviewFindingStateValues`) and derive types from
   them.
 - `DATABASE_URL` is read and validated in `src/config.ts`; `src/db/` code gets
   the connection through `initDb`/`getDb` in `src/db/client.ts`, never

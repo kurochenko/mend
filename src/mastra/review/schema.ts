@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { extractJson } from '@/lib/json'
-import { reviewTemplateIds } from '@/mastra/review/intents'
 
 export const reviewSeveritySchema = z.enum(['bug', 'security', 'performance', 'suggestion'])
 
@@ -57,13 +56,6 @@ export const reviewInlineCommentSchema = z.object({
   suggestion: z.string().nullable().optional(),
 })
 
-export const reviewMetaSchema = z.object({
-  templateId: z.enum(reviewTemplateIds),
-  intent: z.enum(reviewTemplateIds),
-  confidence: z.number().min(0).max(1),
-  selectionSource: z.enum(['config', 'label', 'classifier', 'fallback']),
-})
-
 export const resolutionVerdictSchema = z.object({
   previousFindingId: z.string().min(1),
   status: z.enum(['fixed', 'not_fixed', 'partially_fixed', 'cannot_determine']),
@@ -77,7 +69,6 @@ export const reviewOutputV2Schema = z.object({
   findings: z.array(reviewFindingSchema),
   inlineComments: z.array(reviewInlineCommentSchema),
   resolutionVerdicts: z.array(resolutionVerdictSchema).optional().default([]),
-  meta: reviewMetaSchema.optional(),
 })
 
 export type ReviewOutputV2 = z.infer<typeof reviewOutputV2Schema>

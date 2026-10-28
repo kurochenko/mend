@@ -24,12 +24,10 @@ import {
 import { getReviewAbortSignal } from '@/mastra/review/review-abort'
 import { collectStructuralSignals } from '@/mastra/review/structural-signals'
 import {
-  classifyIntentWithFallback,
   getEffectiveReviewAgentConfig,
   getReviewFeatureFlags,
   invokeReviewAgent,
   resolveReviewContext,
-  selectEffectiveTemplate,
 } from '@/mastra/review/review-pipeline'
 import {
   parseReviewOutputV2,
@@ -40,8 +38,7 @@ import { activeReviewMemoryEntriesSchema } from '@/mastra/review/run-result'
 import { partitionReviewScopeFiles } from '@/mastra/review/file-filter'
 import { mrContextSchema } from '@/lib/review-events'
 import { reviewModeContextSchema } from '@/lib/review-run-input'
-import { intentMetadataSchema, stepPassthroughSchema } from '@/mastra/review/step-schemas'
-import { selectReviewTemplate } from '@/mastra/review/template-selection'
+import { stepPassthroughSchema } from '@/mastra/review/step-schemas'
 
 const reviewStepInputSchema = mrContextSchema.merge(reviewModeContextSchema).extend({
   reviewRunId: z.string(),
@@ -54,7 +51,6 @@ const reviewStepInputSchema = mrContextSchema.merge(reviewModeContextSchema).ext
 export const reviewStepOutputSchema = reviewOutputV2Schema
   .merge(stepPassthroughSchema)
   .merge(reviewModeContextSchema)
-  .merge(intentMetadataSchema)
   .extend({
     featureFlags: featureFlagsSchema,
     reviewDiagnostics: reviewDiagnosticsSchema,
@@ -95,10 +91,6 @@ export const reviewStep = createStep({
     }
     const reviewAgentConfig = getEffectiveReviewAgentConfig(project)
 
-    if (!featureFlags.schemaV2) {
-      throw new Error('review.flags.schema_v2 is false, but this deployment requires schema v2')
-    }
-
     const sessionDir = resolve('sessions', inputData.projectKey, `mr-${inputData.mrIid}`)
 
     const { contextPackage, diffBaseResolution } = await resolveReviewContext(project, {
@@ -132,32 +124,7 @@ export const reviewStep = createStep({
       )
     }
 
-    const { intentResult, intentClassifierFailure, intentClassifierDurationMs } =
-      await classifyIntentWithFallback(
-        project,
-        {
-          title: inputData.title,
-          description: inputData.description,
-          labels: inputData.labels,
-          sourceBranch: inputData.sourceBranch,
-          targetBranch: inputData.targetBranch,
-          worktreePath: inputData.worktreePath,
-        },
-        reviewScopeFiles,
-        sessionDir,
-      )
-
-    const templateResult = selectReviewTemplate({
-      classifiedIntent: intentResult.intent,
-      classifiedConfidence: intentResult.confidence,
-      configTemplate: project.review.template.prompt,
-      labels: inputData.labels,
-      labelPrefix: project.review.template.label_prefix,
-    })
-
-    const effectiveTemplate = selectEffectiveTemplate(featureFlags, templateResult)
-
-    const baseTemplateWarnings = [...effectiveTemplate.warnings, ...diffBaseResolution.warnings]
+    const baseTemplateWarnings = [...diffBaseResolution.warnings]
 
     if (excludedScopeFiles.length > 0) {
       const preview = excludedScopeFiles.slice(0, 6).join(', ')
@@ -174,10 +141,6 @@ export const reviewStep = createStep({
       changedFileCount: reviewScopeFiles.length,
       diffExcerptChars: contextPackage.diffExcerpt.length,
       diffTruncated: contextPackage.diffTruncated,
-      intentClassifierModel: project.review.intent.model,
-      intentClassifierDurationMs,
-      intentClassifierFailure,
-      intentSecondaryIntents: intentResult.secondaryIntents,
       agentHarness: reviewAgentConfig.harness,
       agentModel: reviewAgentConfig.model,
       templateWarnings: baseTemplateWarnings,
@@ -231,15 +194,6 @@ export const reviewStep = createStep({
     console.log(
       `[review] invoking ${reviewAgentConfig.harness} for ${inputData.projectKey} mr-${inputData.mrIid}`,
     )
-    console.log(
-      `[review] intent=${intentResult.intent} confidence=${intentResult.confidence.toFixed(2)} rationale=${intentResult.rationale.join(' | ')}`,
-    )
-    console.log(
-      `[review] template=${effectiveTemplate.templateId} source=${effectiveTemplate.source}`,
-    )
-    for (const warning of effectiveTemplate.warnings) {
-      console.warn(`[review] ${warning}`)
-    }
 
     const { reviewResult, validatedReview, inspectionResult, comparisonExecutionResult } =
       await invokeReviewAgent({
@@ -272,15 +226,7 @@ export const reviewStep = createStep({
       `[review] ${reviewResult.harness} completed for ${inputData.projectKey} mr-${inputData.mrIid}`,
     )
 
-    const normalized = {
-      ...validatedReview,
-      meta: {
-        templateId: effectiveTemplate.templateId,
-        intent: intentResult.intent,
-        confidence: intentResult.confidence,
-        selectionSource: effectiveTemplate.source,
-      },
-    }
+    const normalized = validatedReview
 
     let comparisonResult: ComparisonResult = null
 
@@ -332,11 +278,6 @@ export const reviewStep = createStep({
       reviewMode: inputData.reviewMode,
       previousReviewedSha: inputData.previousReviewedSha,
       previousRunId: inputData.previousRunId,
-      reviewIntent: intentResult.intent,
-      reviewIntentConfidence: intentResult.confidence,
-      reviewIntentRationale: intentResult.rationale,
-      reviewTemplateId: effectiveTemplate.templateId,
-      reviewTemplateSource: effectiveTemplate.source,
       featureFlags,
       reviewDiagnostics,
       comparisonResult: validatedComparisonResult,

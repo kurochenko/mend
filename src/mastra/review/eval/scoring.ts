@@ -1,42 +1,73 @@
+import { z } from 'zod'
 import type { ComparisonResult } from '@/mastra/review/comparison'
 import type { PostStepOutput } from '@/mastra/review/run-result'
-import type { ResolutionVerdict, ReviewFinding, ReviewOutputV2 } from '@/mastra/review/schema'
+import {
+  reviewFindingSchema,
+  type ReviewFinding,
+  type ReviewOutputV2,
+} from '@/mastra/review/schema'
 
 export type ReviewCategory = ReviewFinding['category']
-export type ResolutionVerdictStatus = ResolutionVerdict['status']
 
-export interface ExpectedFinding {
-  id: string
-  fileGlob?: string
-  lineRange?: { from: number; to: number }
-  category?: ReviewCategory
-  pattern: string
-  note?: string
+const safePattern = (pattern: string): RegExp => new RegExp(pattern, 'i')
+
+const isValidPattern = (pattern: string): boolean => {
+  try {
+    safePattern(pattern)
+    return true
+  } catch {
+    return false
+  }
 }
 
-export interface ForbiddenFinding {
-  id: string
-  fileGlob?: string
-  pattern: string
-  note?: string
-}
+const patternSchema = z.string().min(1).refine(isValidPattern, {
+  error: 'pattern must be a valid regular expression',
+})
 
-export interface ExpectedResolutionVerdict {
-  previousFindingRef: string
-  status: ResolutionVerdictStatus
-}
+const countSchema = z.number().int().nonnegative()
 
-export interface BenchmarkExpectation {
-  minFindings?: number
-  maxFindings?: number
-  minInlineComments?: number
-  maxInlineComments?: number
-  requiredCategories?: ReviewCategory[]
-  maxSkippedInline?: number
-  expectedFindings?: ExpectedFinding[]
-  forbiddenFindings?: ForbiddenFinding[]
-  expectedResolutionVerdicts?: ExpectedResolutionVerdict[]
-}
+const expectedFindingSchema = z
+  .object({
+    id: z.string().min(1),
+    fileGlob: z.string().min(1).optional(),
+    lineRange: z.object({ from: z.number().int(), to: z.number().int() }).strict().optional(),
+    category: reviewFindingSchema.shape.category.optional(),
+    pattern: patternSchema,
+    note: z.string().optional(),
+  })
+  .strict()
+
+const forbiddenFindingSchema = z
+  .object({
+    id: z.string().min(1),
+    fileGlob: z.string().min(1).optional(),
+    pattern: patternSchema,
+    note: z.string().optional(),
+  })
+  .strict()
+
+export const benchmarkExpectationSchema = z
+  .object({
+    minFindings: countSchema.optional(),
+    maxFindings: countSchema.optional(),
+    minInlineComments: countSchema.optional(),
+    maxInlineComments: countSchema.optional(),
+    requiredCategories: z.array(reviewFindingSchema.shape.category).optional(),
+    maxSkippedInline: countSchema.optional(),
+    expectedFindings: z.array(expectedFindingSchema).optional(),
+    forbiddenFindings: z.array(forbiddenFindingSchema).optional(),
+    expectedResolutionVerdicts: z
+      .never({
+        error:
+          'expectedResolutionVerdicts is not supported: benchmark cases replay in initial mode, so there are no previous findings to verify',
+      })
+      .optional(),
+  })
+  .strict()
+
+export type ExpectedFinding = z.infer<typeof expectedFindingSchema>
+export type ForbiddenFinding = z.infer<typeof forbiddenFindingSchema>
+export type BenchmarkExpectation = z.infer<typeof benchmarkExpectationSchema>
 
 export interface BenchmarkCase {
   name: string
@@ -70,17 +101,6 @@ export interface UnmatchedReviewItem {
   line: number | null
 }
 
-export interface VerdictScore {
-  expected: number
-  correct: number
-  accuracy: number | null
-  misses: Array<{
-    previousFindingRef: string
-    expected: ResolutionVerdictStatus
-    actual: ResolutionVerdictStatus | null
-  }>
-}
-
 export interface CountDiagnostics {
   checks: Record<string, boolean>
   findings: number
@@ -95,8 +115,6 @@ export interface ReviewExpectationScore {
   totalExpected: number
   falsePositiveHits: FalsePositiveHit[]
   unmatchedItems: UnmatchedReviewItem[]
-  verdictAccuracy: number | null
-  verdicts: VerdictScore
   matched: ReviewItemMatch[]
   missedExpected: string[]
   diagnostics: CountDiagnostics
@@ -124,8 +142,6 @@ export interface BenchmarkCaseScore {
     inlineComments: number
     skippedInline: number
     categories: ReviewCategory[]
-    templateId: string
-    templateSource: string
   }
 }
 
@@ -193,8 +209,6 @@ const globToRegExp = (glob: string): RegExp => {
 
 const matchesGlob = (fileGlob: string, file: string): boolean =>
   globToRegExp(normalizePath(fileGlob)).test(normalizePath(file))
-
-const safePattern = (pattern: string): RegExp => new RegExp(pattern, 'i')
 
 const findingFiles = (finding: ReviewFinding): string[] => {
   const files = finding.files ?? []
@@ -375,29 +389,6 @@ export const matchExpectedFindings = (
   }
 }
 
-const scoreVerdicts = (
-  output: ReviewOutputV2,
-  expectedVerdicts: ExpectedResolutionVerdict[],
-): VerdictScore => {
-  const verdictsByRef = new Map(
-    output.resolutionVerdicts.map((verdict) => [verdict.previousFindingId, verdict.status]),
-  )
-  const misses = expectedVerdicts
-    .map((expected) => ({
-      previousFindingRef: expected.previousFindingRef,
-      expected: expected.status,
-      actual: verdictsByRef.get(expected.previousFindingRef) ?? null,
-    }))
-    .filter((item) => item.expected !== item.actual)
-  const correct = expectedVerdicts.length - misses.length
-  return {
-    expected: expectedVerdicts.length,
-    correct,
-    accuracy: expectedVerdicts.length === 0 ? null : correct / expectedVerdicts.length,
-    misses,
-  }
-}
-
 const uniqueCategories = (output: ReviewOutputV2): ReviewCategory[] =>
   Array.from(new Set(output.findings.map((finding) => finding.category)))
 
@@ -462,9 +453,9 @@ export const scoreReviewOutput = (
   const unmatchedItems = items
     .filter((item) => !matchedItemIds.has(item.id) && !forbiddenItemIds.has(item.id))
     .map(itemSummary)
-  const verdicts = scoreVerdicts(output, expectation.expectedResolutionVerdicts ?? [])
   const recall = expectedFindings.length === 0 ? 1 : matched.length / expectedFindings.length
-  const verdictsPassed = verdicts.accuracy === null || verdicts.accuracy === 1
+  const diagnostics = countDiagnostics(expectation, output)
+  const countChecksPassed = Object.values(diagnostics.checks).every(Boolean)
 
   return {
     recall,
@@ -472,12 +463,10 @@ export const scoreReviewOutput = (
     totalExpected: expectedFindings.length,
     falsePositiveHits,
     unmatchedItems,
-    verdictAccuracy: verdicts.accuracy,
-    verdicts,
     matched,
     missedExpected,
-    diagnostics: countDiagnostics(expectation, output),
-    passed: recall === 1 && falsePositiveHits.length === 0 && verdictsPassed,
+    diagnostics,
+    passed: recall === 1 && falsePositiveHits.length === 0 && countChecksPassed,
   }
 }
 
@@ -538,8 +527,6 @@ export const scoreBenchmarkCase = (
       inlineComments: output.inlineComments.length,
       skippedInline: output.skipped,
       categories: primary.diagnostics.categories,
-      templateId: output.reviewTemplateId,
-      templateSource: output.reviewTemplateSource,
     },
   }
 }

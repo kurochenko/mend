@@ -1,4 +1,3 @@
-import type { ServiceRuntimeMode } from '@/db/service-runtime'
 import {
   SHUTDOWN_GRACE_PERIOD_MS,
   waitForDrainedWork,
@@ -9,7 +8,7 @@ type ShutdownSignal = 'SIGTERM' | 'SIGINT'
 type ShutdownState = 'idle' | 'shutting-down' | 'forced' | 'finished'
 
 interface ShutdownHandlerDependencies {
-  setServiceRuntimeMode: (mode: ServiceRuntimeMode) => Promise<void>
+  stopClaimingReviewJobs: () => void
   stopServer: () => Promise<void>
   clearTimers: () => void
   waitForDrainedWork: (params: { timeoutMs: number }) => Promise<WaitForDrainedWorkResult>
@@ -34,11 +33,7 @@ export const createShutdownHandler = (
   const shutdown = async (signal: ShutdownSignal): Promise<void> => {
     try {
       deps.log(`[shutdown] received ${signal}; draining service`)
-      await deps.setServiceRuntimeMode('draining')
-      if (wasForced()) {
-        return
-      }
-
+      deps.stopClaimingReviewJobs()
       await deps.stopServer()
       if (wasForced()) {
         return
@@ -52,7 +47,7 @@ export const createShutdownHandler = (
 
       if (!result.drained) {
         deps.error(
-          `[shutdown] grace period elapsed with ${result.counts.reviewQueueEntries} running review queue entr${result.counts.reviewQueueEntries === 1 ? 'y' : 'ies'} and ${result.counts.fixBatchEntries} running fix batch entr${result.counts.fixBatchEntries === 1 ? 'y' : 'ies'}`,
+          `[shutdown] grace period elapsed with ${result.counts.reviewQueueEntries} running review queue entr${result.counts.reviewQueueEntries === 1 ? 'y' : 'ies'}`,
         )
       }
 

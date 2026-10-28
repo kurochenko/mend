@@ -1,27 +1,14 @@
-import { createHmac } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, GitLabProjectConfig } from '@/config'
-import { constantTimeEquals } from '@/lib/constant-time'
-import { enqueueMrReview } from '@/server/mr-review-queue'
-import { processReviewNoteEvent } from '@/server/review-note-events'
+import { findTriggerIgnoreReason } from '@/server/review-trigger'
+import { findGitlabWebhookAuthFailure } from '@/server/webhook-auth'
+import { dispatchReviewWebhookEvent } from '@/server/webhook-dispatch'
 import type { ReviewWebhookEvent } from '@/server/webhook-events'
+import { recordWebhookPayload } from '@/server/webhook-recording'
 
-const FIXTURES_DIR = resolve('fixtures', 'webhooks')
-const RECORDING_CONCURRENCY = 2
-const MAX_PENDING_RECORDINGS = 200
-const SIGNATURE_TOLERANCE_SECONDS = 300
-
-interface QueuedRecording {
-  projectKey: string
-  payload: WebhookPayload
-}
-
-const recordingQueue: QueuedRecording[] = []
-let recordingWorkers = 0
+const REVIEWABLE_MR_ACTIONS = new Set(['open', 'update', 'reopen'])
 
 const gitlabProjectSchema = z
   .object({
@@ -43,12 +30,7 @@ const mrObjectAttributesSchema = z
     action: z.string(),
     draft: z.boolean(),
     url: z.string(),
-  })
-  .passthrough()
-
-const mrChangesSchema = z
-  .object({
-    draft: z.object({ previous: z.boolean(), current: z.boolean() }).optional(),
+    last_commit: z.object({ id: z.string() }).passthrough().optional(),
   })
   .passthrough()
 
@@ -58,7 +40,6 @@ const mrWebhookPayloadSchema = z
     project: gitlabProjectSchema,
     object_attributes: mrObjectAttributesSchema,
     labels: z.array(z.object({ title: z.string() }).passthrough()).optional(),
-    changes: mrChangesSchema.optional(),
   })
   .passthrough()
 
@@ -102,46 +83,6 @@ export type MrWebhookPayload = z.infer<typeof mrWebhookPayloadSchema>
 export type NoteWebhookPayload = z.infer<typeof noteWebhookPayloadSchema>
 export type WebhookPayload = z.infer<typeof webhookPayloadSchema>
 
-const writeRecordedPayload = async (projectKey: string, payload: WebhookPayload): Promise<void> => {
-  await mkdir(FIXTURES_DIR, { recursive: true })
-  const objectKind = payload.object_kind
-  const timestamp = Date.now()
-  const filename = `${projectKey}-${objectKind}-${timestamp}-${crypto.randomUUID()}.json`
-  await writeFile(resolve(FIXTURES_DIR, filename), JSON.stringify(payload, null, 2))
-  console.log(`[webhook] recorded payload to fixtures/webhooks/${filename}`)
-}
-
-const drainRecordingQueue = (): void => {
-  while (recordingWorkers < RECORDING_CONCURRENCY && recordingQueue.length > 0) {
-    const next = recordingQueue.shift()
-    if (!next) {
-      return
-    }
-
-    recordingWorkers++
-    void writeRecordedPayload(next.projectKey, next.payload)
-      .catch((error) => {
-        console.error(`[webhook] failed to record payload for ${next.projectKey}:`, error)
-      })
-      .finally(() => {
-        recordingWorkers--
-        drainRecordingQueue()
-      })
-  }
-}
-
-const recordPayload = (projectKey: string, payload: WebhookPayload): void => {
-  if (recordingQueue.length >= MAX_PENDING_RECORDINGS) {
-    console.warn(
-      `[webhook] skipping payload recording for ${projectKey}: queue is full (${recordingQueue.length})`,
-    )
-    return
-  }
-
-  recordingQueue.push({ projectKey, payload })
-  drainRecordingQueue()
-}
-
 export const extractMrLabels = (payload: MrWebhookPayload): string[] => {
   if (payload.labels && payload.labels.length > 0) {
     return payload.labels.map((label) => label.title.trim()).filter((title) => title.length > 0)
@@ -160,26 +101,18 @@ const classifyMrEvent = (
   project: GitLabProjectConfig,
   payload: MrWebhookPayload,
 ): ReviewWebhookEvent => {
-  const { object_attributes: mr, changes } = payload
+  const mr = payload.object_attributes
 
   if (mr.state !== 'opened') {
     return { type: 'ignored', reason: `mr state is ${JSON.stringify(mr.state)}` }
   }
-
-  const trigger = project.trigger
-  if (trigger.mode === 'ready') {
-    const isOpenedAndReady =
-      !mr.draft && (mr.action === 'open' || mr.action === 'update' || mr.action === 'reopen')
-    const isDraftToReady =
-      mr.action === 'update' &&
-      changes?.draft?.previous === true &&
-      changes?.draft?.current === false
-
-    if (!isOpenedAndReady && !isDraftToReady) {
-      return { type: 'ignored', reason: `action ${JSON.stringify(mr.action)}, draft=${mr.draft}` }
-    }
-  } else if (trigger.mode === 'label') {
-    return { type: 'ignored', reason: 'label trigger not yet implemented' }
+  const triggerIgnoreReason = findTriggerIgnoreReason(project.trigger, {
+    action: mr.action,
+    reviewableAction: REVIEWABLE_MR_ACTIONS.has(mr.action),
+    draft: mr.draft,
+  })
+  if (triggerIgnoreReason) {
+    return { type: 'ignored', reason: triggerIgnoreReason }
   }
 
   return {
@@ -193,6 +126,7 @@ const classifyMrEvent = (
     sourceBranch: mr.source_branch,
     targetBranch: mr.target_branch,
     url: mr.url,
+    headSha: mr.last_commit?.id ?? null,
   }
 }
 
@@ -200,16 +134,32 @@ const classifyNoteEvent = (
   project: GitLabProjectConfig,
   payload: NoteWebhookPayload,
 ): ReviewWebhookEvent => {
-  if (payload.object_attributes.noteable_type !== 'MergeRequest' || !payload.merge_request) {
+  const note = payload.object_attributes
+  if (note.noteable_type !== 'MergeRequest' || !payload.merge_request) {
     return { type: 'ignored', reason: 'note not on a merge request' }
+  }
+  if (note.system) {
+    return { type: 'ignored', reason: 'system note' }
+  }
+  if (note.action !== undefined && note.action !== 'create') {
+    return { type: 'ignored', reason: `note action ${JSON.stringify(note.action)}` }
   }
 
   return {
     type: 'mr_note_received',
     projectKey: project.key,
     projectId: payload.project.id,
-    mrIid: payload.merge_request.iid,
-    noteId: payload.object_attributes.id,
+    note: {
+      mrIid: payload.merge_request.iid,
+      noteId: note.id,
+      body: note.note,
+      author: { id: payload.user.id, username: payload.user.username },
+      discussionId: note.discussion_id,
+      isDiffNote: note.type === 'DiffNote',
+      url: note.url,
+      createdAt: note.created_at,
+      updatedAt: note.updated_at,
+    },
   }
 }
 
@@ -222,75 +172,7 @@ export const classifyWebhook = (
       return classifyMrEvent(project, payload)
     case 'note':
       return classifyNoteEvent(project, payload)
-    default:
-      return {
-        type: 'ignored',
-        reason: `unhandled object_kind "${(payload as { object_kind: string }).object_kind}"`,
-      }
   }
-}
-
-interface GitlabSignatureInput {
-  signingToken: string
-  messageId: string | undefined
-  timestamp: string | undefined
-  signatures: string | undefined
-  rawBody: string
-  nowSeconds: number
-}
-
-const verifyGitlabSignature = ({
-  signingToken,
-  messageId,
-  timestamp,
-  signatures,
-  rawBody,
-  nowSeconds,
-}: GitlabSignatureInput): boolean => {
-  if (!messageId || !timestamp || !signatures) {
-    return false
-  }
-
-  const timestampSeconds = Number(timestamp)
-  if (
-    !Number.isInteger(timestampSeconds) ||
-    Math.abs(nowSeconds - timestampSeconds) > SIGNATURE_TOLERANCE_SECONDS
-  ) {
-    return false
-  }
-
-  const key = Buffer.from(signingToken.replace(/^whsec_/, ''), 'base64')
-  const digest = createHmac('sha256', key)
-    .update(`${messageId}.${timestamp}.${rawBody}`)
-    .digest('base64')
-  const expected = `v1,${digest}`
-  return signatures
-    .split(' ')
-    .some((signature) => signature !== '' && constantTimeEquals(signature, expected))
-}
-
-const isAuthorizedWebhook = (
-  project: GitLabProjectConfig,
-  header: (name: string) => string | undefined,
-  rawBody: string,
-): boolean => {
-  if (project.webhook_signing_token) {
-    return verifyGitlabSignature({
-      signingToken: project.webhook_signing_token,
-      messageId: header('webhook-id'),
-      timestamp: header('webhook-timestamp'),
-      signatures: header('webhook-signature'),
-      rawBody,
-      nowSeconds: Math.floor(Date.now() / 1000),
-    })
-  }
-
-  const token = header('X-Gitlab-Token')
-  return (
-    token !== undefined &&
-    project.webhook_secret !== undefined &&
-    constantTimeEquals(token, project.webhook_secret)
-  )
 }
 
 const logWebhookOutcome = (
@@ -341,8 +223,9 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
     }
 
     const rawBody = await c.req.text()
-    if (!isAuthorizedWebhook(project, (name) => c.req.header(name), rawBody)) {
-      logWebhookOutcome(projectKey, gitlabEvent, '401 unauthorized')
+    const authFailure = findGitlabWebhookAuthFailure(project, (name) => c.req.header(name), rawBody)
+    if (authFailure) {
+      logWebhookOutcome(projectKey, gitlabEvent, `401 unauthorized (${authFailure})`)
       return c.json({ error: 'unauthorized' }, 401)
     }
 
@@ -360,44 +243,15 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
     }
     const payload = parseResult.data
 
-    if (config.env.RECORD_WEBHOOKS && c.req.header('X-Gitlab-Event')) {
-      recordPayload(projectKey, payload)
+    if (config.env.RECORD_WEBHOOKS && gitlabEvent) {
+      recordWebhookPayload({ projectKey, eventKind: payload.object_kind, payload: raw })
     }
 
     const event = classifyWebhook(project, payload)
-
     if (event.type === 'ignored') {
       logIgnoredWebhook(projectKey, gitlabEvent, payload, event.reason)
-    } else if (event.type === 'mr_review_requested') {
-      console.log(`[webhook] review requested: ${event.url} (${event.projectKey})`)
-      enqueueMrReview({
-        mastra,
-        project,
-        payload,
-        event,
-      }).catch((err: unknown) =>
-        console.error(`[webhook] queue failure for ${event.projectKey} MR !${event.mrIid}:`, err),
-      )
-    } else if (event.type === 'mr_note_received') {
-      if (payload.object_kind !== 'note') {
-        logWebhookOutcome(projectKey, gitlabEvent, '400 invalid note payload')
-        return c.json({ error: 'invalid note payload' }, 400)
-      }
-      console.log(
-        `[webhook] note received for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}`,
-      )
-      processReviewNoteEvent({
-        project,
-        mastra,
-        payload,
-      }).catch((err: unknown) =>
-        console.error(
-          `[webhook] note processing failure for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}:`,
-          err,
-        ),
-      )
     }
-
+    dispatchReviewWebhookEvent({ mastra, project, event, rawPayload: raw })
     return c.json(event, 200)
   })
 

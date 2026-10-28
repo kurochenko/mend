@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { toErrorMessage } from '@/lib/errors'
 import type { ReviewAgentRunConfig, ReviewAgentResult } from '@/agents/review-harness'
 
@@ -22,14 +22,43 @@ const toCodexReasoningEffort = (
   return thinkingLevel
 }
 
-export const buildCommand = (config: ReviewAgentRunConfig, outputFile: string): string[] => {
+const REVIEW_PERMISSION_PROFILE = 'mend-review'
+
+export const resolveCodexInstallRoot = (
+  findExecutable: (name: string) => string | null = Bun.which,
+): string | null => {
+  const executable = findExecutable('codex')
+  if (!executable) {
+    return null
+  }
+  const realExecutable = realpathSync(executable)
+  return realExecutable.endsWith('.js')
+    ? dirname(dirname(dirname(realExecutable)))
+    : dirname(realExecutable)
+}
+
+export const buildReviewFilesystemPolicy = (codexInstallRoot: string | null): string =>
+  [
+    '":root" = "deny"',
+    '":minimal" = "read"',
+    '":workspace_roots" = "read"',
+    ...(codexInstallRoot ? [`${JSON.stringify(codexInstallRoot)} = "read"`] : []),
+  ].join(', ')
+
+export const buildCommand = (
+  config: ReviewAgentRunConfig,
+  outputFile: string,
+  codexInstallRoot: string | null = resolveCodexInstallRoot(),
+): string[] => {
   const command = [
     'codex',
     'exec',
     '--cd',
     config.cwd,
-    '--sandbox',
-    'read-only',
+    '--config',
+    `default_permissions="${REVIEW_PERMISSION_PROFILE}"`,
+    '--config',
+    `permissions.${REVIEW_PERMISSION_PROFILE}.filesystem={ ${buildReviewFilesystemPolicy(codexInstallRoot)} }`,
     '--model',
     config.model,
     '--json',

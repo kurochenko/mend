@@ -71,6 +71,15 @@ export interface PublishBatchResult {
   preExistingDraftCount: number
   recoveredDraftCount: number
   draftRecoveryAction: 'none' | 'reused' | 'cleaned'
-  summaryNoteId: number
-  summaryReconciled: boolean
+}
+
+export interface PublishSummaryNoteParams {
+  changeNumber: number
+  body: string
+  matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
+}
+
+export interface PublishSummaryNoteResult {
+  id: number
+  reconciled: boolean
 }

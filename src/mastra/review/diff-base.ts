@@ -1,6 +1,7 @@
 import { toErrorMessage } from '@/lib/errors'
 import { assertSafeGitRef, execGit } from '@/lib/exec'
 import type { DiffRefs } from '@/integrations/provider/types'
+import { originTrackingRef } from '@/integrations/repo-remote'
 
 export type DiffBaseParams = {
   worktreePath: string
@@ -8,6 +9,7 @@ export type DiffBaseParams = {
   previousReviewedSha: string | null
   targetBranch: string
   diffRefs: DiffRefs
+  refetchOrigin: () => Promise<void>
 }
 
 export type DiffBaseResult = {
@@ -22,10 +24,6 @@ const refExists = async (cwd: string, ref: string): Promise<boolean> => {
   } catch {
     return false
   }
-}
-
-const fetchOrigin = async (cwd: string): Promise<void> => {
-  await execGit(['fetch', 'origin', '--prune'], cwd)
 }
 
 const isAncestor = async (
@@ -79,6 +77,7 @@ export const resolveDiffBaseRef = async (params: DiffBaseParams): Promise<DiffBa
   const rawCandidates = dedupeRefs([
     ...(params.diffRefs.startSha ? [params.diffRefs.startSha] : []),
     params.diffRefs.baseSha,
+    originTrackingRef(params.targetBranch),
     params.targetBranch,
   ])
   const { valid: candidates, warnings } = sanitizeCandidates(rawCandidates)
@@ -116,8 +115,8 @@ export const resolveDiffBaseRef = async (params: DiffBaseParams): Promise<DiffBa
     }
   }
 
-  warnings.push('diff base refs missing locally, fetching origin --prune before retry')
-  await fetchOrigin(params.worktreePath)
+  warnings.push('diff base refs missing locally, fetching origin before retry')
+  await params.refetchOrigin()
 
   for (const candidate of candidates) {
     if (await refExists(params.worktreePath, candidate)) {

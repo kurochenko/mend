@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test'
-import { buildCommand, extractInspectedChangedFilesFromEvents } from '@/agents/codex-harness'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  buildCommand,
+  extractInspectedChangedFilesFromEvents,
+  resolveCodexInstallRoot,
+} from '@/agents/codex-harness'
 
 const commandEvent = (command: string): string =>
   JSON.stringify({
@@ -67,5 +74,58 @@ describe('buildCommand', () => {
         '/sessions/out.txt',
       ),
     ).toContain('model_reasoning_effort="minimal"')
+  })
+
+  it('confines Codex tool calls to reading the worktree with no network', () => {
+    const command = buildCommand(
+      {
+        cwd: '/repo',
+        model: 'gpt-5.5',
+        instructions: 'Review carefully.',
+        prompt: 'Review this MR.',
+        sessionDir: '/sessions',
+      },
+      '/sessions/out.txt',
+      '/opt/codex/@openai',
+    )
+
+    expect(command).toContain('default_permissions="mend-review"')
+    expect(command).toContain(
+      'permissions.mend-review.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = "read", "/opt/codex/@openai" = "read" }',
+    )
+    expect(command).not.toContain('--sandbox')
+  })
+})
+
+describe('resolveCodexInstallRoot', () => {
+  it('grants the npm package scope when codex is the JavaScript launcher', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'mend-codex-root-'))
+    try {
+      const launcherDir = join(tmp, 'node_modules', '@openai', 'codex', 'bin')
+      mkdirSync(launcherDir, { recursive: true })
+      writeFileSync(join(launcherDir, 'codex.js'), '')
+      symlinkSync(join(launcherDir, 'codex.js'), join(tmp, 'codex'))
+
+      expect(resolveCodexInstallRoot(() => join(tmp, 'codex'))).toBe(
+        join(realpathSync(tmp), 'node_modules', '@openai'),
+      )
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('grants the binary directory for a native codex executable', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'mend-codex-native-'))
+    try {
+      writeFileSync(join(tmp, 'codex'), '')
+
+      expect(resolveCodexInstallRoot(() => join(tmp, 'codex'))).toBe(realpathSync(tmp))
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null when codex is not on PATH', () => {
+    expect(resolveCodexInstallRoot(() => null)).toBeNull()
   })
 })

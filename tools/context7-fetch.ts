@@ -1,10 +1,11 @@
 import { lookupContext7 } from '../src/integrations/context7'
 
 const printUsage = (): void => {
-  console.log(
-    'Usage: bun run tools/context7-fetch.ts <query> [--library <name-or-id>] [--limit <n>]',
-  )
+  console.log('Usage: bun run context7-fetch <query> [--library <name-or-id>] [--limit <n>]')
+  console.log('   or: bun run context7-fetch --help')
 }
+
+const isHelpArg = (arg: string): boolean => arg === '--help' || arg === '-h'
 
 const parseArgs = (
   args: string[],
@@ -17,6 +18,9 @@ const parseArgs = (
   if (!query) {
     throw new Error('Missing query')
   }
+  if (query.startsWith('-')) {
+    throw new Error(`Expected a query before options, got: ${query}`)
+  }
 
   let library: string | undefined
   let limit = 5
@@ -26,6 +30,9 @@ const parseArgs = (
     if (arg === '--library') {
       library = args[i + 1]
       i++
+      if (!library) {
+        throw new Error('Missing value for --library')
+      }
       continue
     }
     if (arg === '--limit') {
@@ -49,6 +56,10 @@ const parseArgs = (
 
 const main = async (): Promise<void> => {
   const args = Bun.argv.slice(2)
+  if (args.some(isHelpArg)) {
+    printUsage()
+    return
+  }
   if (args.length === 0) {
     printUsage()
     process.exitCode = 1

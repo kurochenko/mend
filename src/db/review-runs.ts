@@ -1,4 +1,4 @@
-import { and, desc, eq, ne, type SQL } from 'drizzle-orm'
+import { and, desc, eq, ne, sql, type SQL } from 'drizzle-orm'
 import type { InferSelectModel } from 'drizzle-orm'
 import { getDb } from '@/db/client'
 import { reviewRunStatusEnum, reviewRuns } from '@/db/schema'
@@ -40,12 +40,6 @@ interface FailReviewRunParams {
   result?: unknown
 }
 
-interface UpdateReviewRunResultParams {
-  id: string
-  result: unknown
-  comparisonResult?: unknown
-}
-
 interface ListReviewRunsParams {
   projectKey?: string
   mrIid?: number
@@ -60,6 +54,8 @@ interface SuccessfulRunLookupParams {
 interface SuccessfulRunForShaLookupParams extends SuccessfulRunLookupParams {
   sha: string
 }
+
+const isNotDryRun = sql`coalesce((${reviewRuns.result} -> 'featureFlags' ->> 'dryRun')::boolean, false) = false`
 
 const buildWhere = (params: ListReviewRunsParams): SQL | undefined => {
   const conditions: SQL[] = []
@@ -128,17 +124,6 @@ export const failReviewRun = async (params: FailReviewRunParams): Promise<void> 
     .where(eq(reviewRuns.id, params.id))
 }
 
-export const updateReviewRunResult = async (params: UpdateReviewRunResultParams): Promise<void> => {
-  const db = getDb()
-  await db
-    .update(reviewRuns)
-    .set({
-      result: params.result,
-      comparisonResult: params.comparisonResult ?? null,
-    })
-    .where(eq(reviewRuns.id, params.id))
-}
-
 export const getReviewRun = async (id: string): Promise<ReviewRunRecord | null> => {
   const db = getDb()
   const [row] = await db.select().from(reviewRuns).where(eq(reviewRuns.id, id)).limit(1)
@@ -200,6 +185,7 @@ export const getLatestSuccessfulReviewRun = async (
         eq(reviewRuns.mrIid, params.mrIid),
         eq(reviewRuns.status, 'success'),
         ne(reviewRuns.source, benchmarkSource),
+        isNotDryRun,
       ),
     )
     .orderBy(desc(reviewRuns.createdAt))
@@ -222,6 +208,7 @@ export const hasSuccessfulReviewRunForSha = async (
         eq(reviewRuns.commitSha, params.sha),
         eq(reviewRuns.status, 'success'),
         ne(reviewRuns.source, benchmarkSource),
+        isNotDryRun,
       ),
     )
     .limit(1)
