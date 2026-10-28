@@ -1,6 +1,6 @@
 ---
 name: coding-general
-description: General coding rules for scoped, simple, verifiable implementation in Mend. Use when implementing or refactoring any code.
+description: General coding rules for scoped, simple, verifiable implementation in Mend. Use when implementing, fixing, or refactoring any code.
 license: MIT
 compatibility: codex, cursor, opencode, pi, claude-code
 metadata:
@@ -10,61 +10,75 @@ metadata:
 
 # Coding General
 
-Mend is an autonomous MR review system. Prefer deterministic orchestration, explicit boundaries, and focused tests over clever agent-specific shortcuts.
+Implement the smallest complete change that satisfies the request and preserves review
+safety, idempotency, and clear failure states. Read `AGENTS.md` and the relevant `.spec/`
+context, then inspect the affected execution path (webhook -> queue -> workflow step ->
+harness/provider/db) before editing. For an incident or recurring failure, use
+`diagnose-repair` to establish the cause first.
 
-## Core Principles
+## Ownership and scope
 
-- Correctness first: preserve review safety, idempotency, and clear failure states.
-- KISS and YAGNI are default policy.
-- Prefer the smallest working vertical slice over broad scaffolding.
-- Research facts instead of guessing. Verify Mastra, Codex, GitLab, Drizzle, Bun, and Context7 behavior from installed source, official docs, or command help.
-- Keep side effects at boundaries.
-- Do not add speculative abstractions, config, schemas, or types without a current caller.
+`feature-layout` owns module placement and dependency boundaries. Webhook handlers parse
+and route, queue code owns latest-wins and SHA dedup, workflow steps orchestrate, harnesses
+only run coding agents, provider adapters own provider API details, DB modules own
+persistence, and posting safety stays in the post/publish layer.
 
-## Workflow
+Prefer locality and existing helpers (`src/lib/exec.ts`, `src/lib/json.ts`,
+`src/lib/diff.ts`, `src/integrations/idempotent.ts`). Add abstractions only for a
+demonstrated boundary or shared invariant; no speculative code, config, schemas, or types
+without a current caller (`knip` enforces unused exports). Avoid passive forwarding layers
+and unrelated cleanup. Use the user's existing authorization; ask only when a question
+resolves material uncertainty.
 
-- Read `AGENTS.md` and the relevant `.spec` context before behavior changes.
-- Scan for existing helpers and tests before adding new code.
-- Add or update focused tests with behavior changes.
-- Run `bun run check:agent <file>` after editing TypeScript or JavaScript files.
-- Run `bun run review` and `bun run check` before declaring work ready.
+## Repository conventions
 
-## Boundaries
+- Use Bun and existing `package.json` scripts. `coding-typescript` owns import, type, and
+  schema conventions.
+- No comments except TODOs with a ticket ID. No lint disables, baseline increases, or rule
+  weakening without approval.
+- Verify Mastra, Codex, Pi, OpenCode, GitLab, GitHub, Drizzle, Bun, and Context7 behavior from
+  installed source, official docs, or command help, not memory.
+- Expected provider/harness states (draft conflicts, missing threads, timeouts, invalid
+  output) get typed handling; unexpected defects fail fast with contextual errors. Never
+  swallow errors silently or log secrets and raw provider payloads.
+- Reuse installed packages and platform APIs. Before adding a dependency verify Bun
+  compatibility, maintenance, and cost. Never hand-edit generated files (`drizzle/`).
 
-- Webhook handlers parse provider events and route work.
-- Queue code owns latest-wins and SHA dedupe behavior.
-- Mastra workflow steps orchestrate setup, review, and post.
-- Agent harnesses invoke coding agents and return structured results only.
-- Review modules own prompts, schemas, diff context, inspection enforcement, diagnostics, and memory prompt shaping.
-- Git provider adapters own provider API transport, error classification, discussion/note mapping, and publishing.
-- DB modules own persistence and explicit state transitions.
+## Resource budgets
 
-If a boundary lint rule fires and the clean fix is not obvious, stop and ask. Do not weaken the rule or add disables.
+Mend ingests untrusted and unbounded inputs. Apply limits before expensive work, using the
+owning config or named constant as the source of truth, and trace peak live data across a
+whole review, including concurrent queue workers and retained results.
 
-## Implementation Guidelines
+- Webhook bodies: authenticate (GitLab token, GitHub HMAC) before parsing or doing work;
+  treat `Content-Length` as a hint only.
+- Diffs and context: budget prompt sections by characters or items and record what was cut
+  (as `prompt-templates.ts` lists files not fully included) so the agent can inspect the
+  rest with tools. Truncation must be visible, never silent.
+- Harness output and subprocesses: every agent run has a timeout; parse output once with
+  `extractJson` plus Zod `safeParse`; do not retain full transcripts or stdout beyond what
+  diagnostics need.
+- Provider pagination: follow `x-next-page` / `hasNextPage` cursors explicitly and bound how
+  many results feed prompts or notes; do not refetch unchanged threads within a run.
+- Concurrency: one worker per MR key (`mr-locks.ts`, `repo-locks.ts`); keep worktrees,
+  sessions, and payloads scoped to that run and cleaned up on every exit path.
+- Prove each limit at its boundary with hostile inputs: huge diffs, many files, long
+  harness output, many pages, concurrent webhooks for one MR. Assert bounded work, useful
+  partial results, and recovery.
 
-- Use intent-revealing names.
-- Keep functions small and focused.
-- Prefer early returns over nested control flow.
-- Prefer explicit domain types for non-trivial inputs and outputs.
-- Validate unknown input once at the boundary with Zod or a typed parser.
-- Keep opaque external payloads as `unknown` until parsed.
-- Preserve absence as `null` or `undefined`; avoid sentinel defaults.
-- Fail fast with contextual errors.
-- Do not swallow errors silently.
-- Comments are not allowed except TODOs with a ticket ID.
+## Verification
 
-## Testing
+Prove changed behavior and material failure cases at the cheapest reliable layer; use
+`testing-unit` for focused tests. Normal tests never call live GitLab, GitHub, coding agents,
+or paid services; use fakes, recorded payloads, and harness doubles. Avoid tests that only
+mirror a reversible, low-impact implementation.
 
-Normal tests must not call live GitLab, live AI agents, or paid external services. Use fakes, fixtures, recorded payloads, or harness test doubles.
+High-risk areas always need focused tests: queue dedup and restart recovery, diff-base
+resolution, inspection enforcement, review schema parsing and retry, draft/pending-review
+publishing safety, thread identity and reply idempotency, memory scoping, and harness
+failure, timeout, and invalid output.
 
-High-risk areas need focused tests:
-
-- MR queue dedupe and restart recovery
-- diff-base resolution
-- file inspection enforcement
-- review schema parsing and retry behavior
-- GitLab draft-note publishing safety
-- thread identity and reply idempotency
-- memory extraction and scoping
-- harness failure, timeout, and invalid-output handling
+Run `bun run check:agent <file>` for each touched file and the narrowest covering test while
+iterating; use `branch-review` (`bun run review`, `bun run check`) for final validation.
+Repeat or broaden checks only for new changes, failures, or remaining uncertainty. Report
+what was actually verified and any material gap.

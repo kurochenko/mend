@@ -1,6 +1,6 @@
 ---
 name: git
-description: General git safety and workflow guidance for branches, commits, rebases, and merges. Use when operating on git history.
+description: Safe Git and GitLab workflow for Mend branches, commits, rebases, merges, and merge requests, including commit subject and MR title format. Use when operating on Git history or delivery state, or when writing a commit subject or MR title.
 license: MIT
 compatibility: codex, cursor, opencode, pi, claude-code
 metadata:
@@ -10,76 +10,89 @@ metadata:
 
 # Git
 
-Project-agnostic rules for safe, predictable git operations.
+## Safety
 
-## When to Use
+- Inspect `git status` and the relevant diff before changing history or staging.
+- Preserve unrelated and uncommitted work. To set work aside, prefer a temporary
+  WIP commit. Never use bare `git stash` or `git stash pop`: the stash stack is
+  shared across worktrees and sessions. If a stash is unavoidable, use
+  `git stash push -u -m "<unique-tag>"`, record its SHA from
+  `git stash list --format='%H %gs'`, restore with `git stash apply <sha>`, then
+  drop the entry after re-finding it by tag.
+- Never use destructive checkout/reset or force push without explicit approval.
+- Do not stage, commit, push, or create an MR unless the user requested that action.
+- `origin` is the GitLab remote. The `github` remote is the public mirror; do not
+  push to it unless asked. Never bypass the pre-push hook (`bun run check` and
+  `scripts/guard-public.sh`).
+- Never commit secrets, `.env`, `mend.yml`, `private/`, or runtime directories
+  (`sessions/`, `workspaces/`, recorded payloads in `fixtures/webhooks/`).
 
-- Creating branches or commits
-- Rebasing, merging, or resolving conflicts
-- Preparing changes for review or release
+## Branches and commits
 
-## Safety Rules
+- Start new work from `origin/main` after fetching, when the checkout is clean and
+  the task permits switching branches.
+- Use a short kebab-case branch with a type prefix: `fix/status-note-sync`.
+- Keep one coherent change per branch and MR.
+- Stage only task-owned files after reviewing the diff.
 
-- Never lose uncommitted work. Use `git status`, then stash or commit before risky ops.
-- Do not push without explicit user consent.
-- Avoid destructive commands (`reset --hard`, `checkout --`, force push) unless user requests.
-- Do not commit secrets or local-only files.
-- If unsure, ask rather than guessing.
+## Titles
 
-## Workflow
+Commit subjects and MR titles share one format:
 
-### Branching
-
-- Start from the default branch
-- Pull latest before branching
-- Keep scope focused to a single change
-- Use prefixes: `feat/`, `fix/`, `chore/`, `docs/`
-
-### Committing
-
-- Review `git diff` before staging
-- Stage only relevant files
-- Write concise, imperative messages
-- Use conventional commits: `feat:`, `fix:`, `perf:`, `refactor:`, `docs:`, `chore:`, `test:`, `ci:`
-- If the change has a Beads ticket, include the id in the subject: `feat: [MEND-c8t] add quality gates`
-- Prefer multiple small commits over one noisy commit
-
-### Merge Requests
-
-- Use the same Conventional Commit subject format for MR titles, including the Beads ticket id when applicable.
-- Write merge request descriptions from a real multiline file or here-doc.
-- Do not pass descriptions with escaped newline text such as `\n`; GitLab will render that literally.
-- Before creating or updating a merge request, preview the exact description text that will be sent.
-- Use this structure by default:
-
-```markdown
-## Summary
-
-- One focused bullet for the behavior change.
-- One focused bullet for the user or system impact.
-
-## Verification
-
-- `command that passed`
-- `command that failed or was skipped` with the reason
+```text
+<type>(optional-scope): [MEND-xxx] clause
 ```
 
-### Rebasing
+Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `chore`, `test`, `ci`. Use
+`refactor` for structure or ownership changes that intentionally preserve behavior.
+Scope is optional lowercase kebab-case naming the area (`queue`, `github`).
+Include the Beads id in brackets right after the colon when the work has a ticket;
+omit it otherwise and never create a ticket just to fill the title. No trailing
+period.
 
-- Ensure a clean working tree (stash if needed)
-- Fetch before rebase
-- Rebase onto the latest default branch
-- If conflicts occur, stop and ask for resolution strategy
-- After rebase, verify the working tree and run targeted tests if needed
-- Report changes and wait for user approval before any push
+The clause is lowercase imperative and names the durable change, not an empty
+outcome (`fix X`, `update X`). Put the mechanism in the clause when it is the
+change; leave endpoint and patch details to the MR body. Examples from history:
 
-## Conflict Handling
+- `fix: exclude benchmark replays from review run history`
+- `fix: reconcile completed GitHub reviews`
+- `feat: [MEND-c8t] add quality gates`
 
-- Show conflicted files and the relevant hunks
-- Ask which side to keep when logic is ambiguous
-- Do not assume intent on business logic changes
+## Merge requests
 
-## Recovery
+Use the `glab-personal` alias through an interactive zsh so it resolves:
 
-- Abort a rebase: `git rebase --abort`
-- Recover lost commits: `git reflog` then `git cherry-pick <hash>`
+1. Check for an existing MR first:
+   `zsh -ic 'glab-personal mr list --source-branch <branch>'`.
+2. Write the description as real multiline Markdown to a file or here-doc; never
+   pass escaped `\n` text. Preview the exact title and description before sending.
+3. Create with explicit branches:
+   `zsh -ic 'glab-personal mr create --source-branch <branch> --target-branch main --title "<title>" --description "$(cat /tmp/mr-description.md)"'`.
+4. Verify with `zsh -ic 'glab-personal mr view <iid>'`: target branch, title,
+   description rendering, and latest head SHA.
+
+The description covers the behavior change, user or system value, and durable
+decisions. Keep command logs out unless requested. When a step must run right
+after deploy (migration, backfill), add an **After deploy** section with the exact
+command, environment, and ordering constraint. `glab api` here does not support
+`--jq`; pipe JSON to local tooling instead.
+
+Push a settled, validated revision rather than after each edit. Collect and triage
+review findings before editing, then push grouped repairs. No empty retrigger
+commits. Do not rewrite published history without approval.
+
+## Rebasing and integration
+
+- Rebase only from a clean tree, after `git fetch origin`, onto `origin/main`.
+- Update the branch when a conflict, dependency, or changed target behavior
+  requires it; an unrelated target advance alone does not.
+- After rebasing, inspect the diff and rerun affected checks. Report and wait for
+  approval before force-pushing a rewritten branch.
+
+## Conflicts and recovery
+
+- Resolve mechanical conflicts from current code and documented ownership.
+- Ask when both sides encode plausible but incompatible behavior.
+- Prefer `git rebase --abort` or `git merge --abort` over improvised recovery.
+- Use `git reflog` to locate recoverable commits and `git cherry-pick <sha>` to
+  restore them; do not reset destructively by default.
