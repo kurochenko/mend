@@ -1,6 +1,6 @@
 ---
 name: branch-review
-description: Use after a logical implementation slice and before saying Mend work is ready, asking for review, staging, or committing. Combines deterministic review checks with judgment-based code review.
+description: Validate a settled Mend change and distinguish local completion, MR validation, and merge readiness. Use before saying work is ready, asking for review, committing, or opening an MR; scale checks to the changed surface.
 license: MIT
 compatibility: codex, cursor, opencode, pi, claude-code
 metadata:
@@ -10,51 +10,91 @@ metadata:
 
 # Branch Review
 
-Use this before declaring work ready, creating an MR, or committing. Do not run it after every small edit; use `bun run check:agent <file>` during normal editing.
+This skill owns validation stages; `code-review-general` owns review judgment and
+`git` owns publication. Carry forward the user's authorization and integration
+target (`origin/main` otherwise). Do not turn every local handoff into a
+merge-ready claim, and do not run this after every small edit.
 
-## Mechanical Checks
+## Local implementation
 
-Start with:
+While iterating, run `bun run check:agent <file>` for each touched TypeScript or
+JavaScript file plus the narrowest focused test. Review the final diff with
+`code-review-general` at a depth proportionate to risk.
+
+Run the diff-level scan against the target:
 
 ```bash
-bun run review
+bun run review --base origin/main
 ```
 
-Then run:
+Without `--base` it diffs against `HEAD`, which covers only uncommitted work and
+is not final-diff evidence. Local completion means the requested change and its
+relevant checks are done; it claims nothing about the MR pipeline or live behavior.
+
+## MR validation
+
+Run the full gate once the implementation is settled:
 
 ```bash
 bun run check
 ```
 
-If the full gate fails because of unrelated existing worktree debt, report the failing command and keep the current change scoped.
+If it fails because of unrelated existing worktree debt, report the failing
+command and keep the change scoped. Record the revision and result of each check
+and reuse that evidence until a later diff invalidates it. The pre-push hook
+reruns `bun run check` and the public-token guard; never bypass it.
 
-## Judgment Checks
+Add proof for the changed surface:
 
-Review the diff for Mend-specific risk:
-
-- Webhook handlers parse and route events; they should not own provider recovery, posting, or persistence orchestration.
-- Mastra workflow steps should have clear ownership: setup prepares worktrees, review invokes and validates reviewers, post publishes safely.
-- Agent harnesses should run coding agents only. They should not know GitLab posting, status notes, or DB persistence.
-- Git provider adapters own provider API details, request parameters, pagination, error classification, and provider-to-domain mapping.
-- DB modules own persistence and state transitions. Multi-row or related state changes should be transactional where practical.
-- Review output schemas and prompt contracts must stay deterministic and covered by tests.
-- Draft-note and publish safety changes need focused tests.
-- Queue, diff-base, previous-context, thread, and memory behavior changes need focused tests.
+- Review execution, queueing, posting, thread handling, memory, diff-base
+  resolution, or harness changes need focused tests covering success and failure.
+- End-to-end posting or workflow changes: `bun run test:e2e` (fake GitLab, needs
+  `TEST_DATABASE_URL`).
+- Schema or DB module changes: `bun run db:generate` for migrations, then
+  `bun run db:test:setup` and `bun run test:db` against a test database. DB suites
+  skip silently without `TEST_DATABASE_URL`; if not run locally, say so and rely
+  on the MR pipeline.
+- Prompt, template, or review-quality changes: `bun run replay --benchmark
+  <config.json>` when matching fixtures exist; otherwise record the gap.
 
 ## Common Mend Regressions
 
-- Adding speculative harness abstractions without a selected caller.
-- Letting provider payload shapes leak into review/domain logic.
-- Posting or publishing GitLab notes outside the post/publish layer.
-- Introducing live AI, GitLab, or network calls into normal tests.
-- Changing review behavior without updating replay/eval/test coverage.
+- Speculative harness or provider abstractions without a selected caller.
+- Provider payload shapes leaking into review or workflow logic.
+- Posting or publishing notes outside the post/publish layer, or weakening the
+  pre-existing-draft refusal.
+- GitLab-only fixes that break GitHub parity behind the `ReviewProvider` port.
+- Live AI, provider, or network calls in normal tests; unrestored `mock.module`.
+- Review behavior changes without replay, eval, or test coverage.
 - Weakening lint, dependency, or architecture rules instead of fixing ownership.
 
-## Commit and MR Hygiene
+## Follow-ups
 
-- Branches use short kebab-case with a type prefix, for example `feat/codex-reviewer` or `fix/status-note-sync`.
-- Commit subjects and MR titles use Conventional Commits.
-- If a change has a Beads ticket, include the id in both the commit subject and MR title, for example `feat: [MEND-c8t] add quality gates`.
-- MR descriptions should summarize what changed, the user or system value, and durable decisions. Keep verification logs out unless the user asks for them.
+After green validation, a localized follow-up needs affected checks and a
+final-diff review. Repeat the full gate when the follow-up broadens behavior or
+architecture, changes dependencies or schema, follows rebase conflicts, causes a
+focused failure, or leaves a material verification gap.
 
-End with what changed, what passed, and remaining risks. Do not commit unless the user explicitly asked for a commit.
+## Merge readiness
+
+Only call an MR merge-ready when:
+
+- Its current head contains the reviewed change and is integrated with the target
+  as `git` requires.
+- The MR pipeline (lint, typecheck, test with Postgres, e2e) passes on that head.
+- Required focused proof is complete and review findings are resolved by verified
+  fixes or evidence-backed decisions.
+- The MR targets `main`, and its title and description follow `git`.
+
+## Commit and MR hygiene
+
+- Branches are short kebab-case with a type prefix: `feat/codex-reviewer`,
+  `fix/status-note-sync`.
+- Commit subjects and MR titles use Conventional Commits, with the Beads ticket id
+  when one exists: `feat: [MEND-c8t] add quality gates`.
+- MR descriptions summarize what changed, the user or system value, and durable
+  decisions. Keep verification logs out unless asked.
+
+Report what changed, what passed, what remains pending, and which stage is
+complete. Committing, pushing, or merging requires the corresponding user
+authorization; readiness does not grant it.

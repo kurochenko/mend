@@ -7,15 +7,15 @@
     },
     "coding-general": {
       "version": 3,
-      "hash": "sha256:352341519a49378ed6304df55850cca7a1e5e6935bb856c36e5656324333141b"
+      "hash": "sha256:b964af39500f965a137546558597f492c038bcc093dd2145801f9e985ee2cac6"
     },
     "coding-typescript": {
       "version": 3,
-      "hash": "sha256:d967ff2a39c142d563d8b387846d552c2ea9c624cc1564dfa954fafd0fdb1354"
+      "hash": "sha256:db5bb9edc86d2c91aa6edc9f4475ada074cb450bc7d69c636eee16b06e47f4c7"
     },
     "git": {
       "version": 4,
-      "hash": "sha256:32616cf8513a4d62d81690a89820baa1f8785373c21c4d3a7cd1233cc56d73f3"
+      "hash": "sha256:d6cea71cb60f5d4b28ef08973e13603cb026eeed2142b085ddd799e2208db347"
     },
     "skillbook": {
       "version": 2,
@@ -27,27 +27,39 @@
     },
     "branch-review": {
       "version": 2,
-      "hash": "sha256:a0ab81c3bbc48b5140f1c30fccf1967ca74824124de25582c4c84f4f83785730"
+      "hash": "sha256:c05e24823e33f704e647392fe1eef16aea554005e8deb6ab20fa83ecdc5fa198"
     },
     "code-review-general": {
       "version": 3,
-      "hash": "sha256:c8c23363c6dc77d93162b9de43c41c9054bae971350154de14018f7993f2c992"
+      "hash": "sha256:fa972394e6bc1dec32d1be07f6cdc685b3ccbb049e40d6d81fef0c19efe5aeb7"
     },
     "gitlab-mr-review": {
       "version": 1,
-      "hash": "sha256:40002edec1cbae1e7164afbee9c5aa234068a34911f1ef087943f56c359e2363"
+      "hash": "sha256:d1c5752630b68b244402cb0ee4e5d29f1b82b4981066f6c8aebcc4646d55d41a"
     },
     "typescript-cli": {
       "version": 1,
-      "hash": "sha256:975668b2a5a57be2dd167e4829996bbe0da201c87b253724bbb84d686bf7fa53"
+      "hash": "sha256:9f67337fcb3c200fb1d3fc972fcb77a427f64617d9a8f62d4de70bfcdcb4023c"
     },
     "feature-layout": {
       "version": 4,
-      "hash": "sha256:0864291e93466ecd294182e53638cc20f9b0bba25174c1a97673be4a53e422a6"
+      "hash": "sha256:3a3be01514f7dba1bf2be27a6ad54e5589d79c0a756a108815a798ae142242ba"
     },
     "deep-branch-review": {
       "version": 2,
       "hash": "sha256:a186ae846f93c28647d68957c8e5da8ccf6c9dbf2698087bd66165a7ed8a1123"
+    },
+    "coding-drizzle-postgres": {
+      "version": 1,
+      "hash": "sha256:af9af4345c87ab5ba60875c57a68965e609165b499aa0bb7c03c86a1ac7cb845"
+    },
+    "diagnose-repair": {
+      "version": 1,
+      "hash": "sha256:a61bcd0ed87dcc99eeadb9c39a9e6263f18525d3d8d926f70fa3a8c87f2f769d"
+    },
+    "testing-unit": {
+      "version": 1,
+      "hash": "sha256:e8e1d663459249d7abfee4a1f76c4451d7be2d148f7faaa4d1e618bb32e31a51"
     }
   },
   "harnesses": [
