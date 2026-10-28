@@ -98,32 +98,31 @@ describe('applyBlockingReviewPolicy', () => {
     expect(result.summary).not.toContain('extracting this helper')
   })
 
-  it.each([
-    'not_fixed',
-    'partially_fixed',
-    'cannot_determine',
-  ] as const)('keeps an update blocked when a previous finding is %s', (status) => {
-    const result = applyBlockingReviewPolicy(
-      output({
-        assessment: 'approve',
-        summary: 'All previous findings are fixed.',
-        resolutionVerdicts: [
-          {
-            previousFindingId: expectedPriorBlocker,
-            status,
-            explanation: 'The previous blocker is still unresolved.',
-          },
-        ],
-      }),
-      [expectedPriorBlocker],
-    )
+  it.each(['not_fixed', 'partially_fixed', 'cannot_determine'] as const)(
+    'keeps an update blocked when a previous finding is %s',
+    (status) => {
+      const result = applyBlockingReviewPolicy(
+        output({
+          assessment: 'approve',
+          summary: 'All previous findings are fixed.',
+          resolutionVerdicts: [
+            {
+              previousFindingId: expectedPriorBlocker,
+              status,
+              explanation: 'The previous blocker is still unresolved.',
+            },
+          ],
+        }),
+        [expectedPriorBlocker],
+      )
 
-    expect(result.assessment).toBe('request_changes')
-    expect(result.summary).toBe(
-      '1 previous release- or development-blocking defect remains unresolved.',
-    )
-    expect(result.summary).not.toContain('All previous findings are fixed')
-  })
+      expect(result.assessment).toBe('request_changes')
+      expect(result.summary).toBe(
+        '1 previous release- or development-blocking defect remains unresolved.',
+      )
+      expect(result.summary).not.toContain('All previous findings are fixed')
+    },
+  )
 
   it('allows approval when every previous blocker is fixed', () => {
     const result = applyBlockingReviewPolicy(

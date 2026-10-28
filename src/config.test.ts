@@ -76,6 +76,8 @@ describe('parseProjectsFileConfig', () => {
     expect(config.projects.app?.review.fix.max_loops).toBe(3)
     expect(config.projects.app?.review.intent.harness).toBe('pi')
     expect(config.projects.app?.review.flags.bug_history).toBe(true)
+    expect(config.projects.app?.review.template.prompt).toBe('auto')
+    expect(config.projects.app?.review.template.label_prefix).toBe('ai-review:')
   })
 
   test('parses codex intent classifier harness', () => {

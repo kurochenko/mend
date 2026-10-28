@@ -96,6 +96,7 @@ export const buildReviewDiagnostics = (input: BuildReviewDiagnosticsInput): Revi
     changedFileCount: 0,
     changedFileCoverage: 0,
   },
+  structuralSignals: null,
   contextPackageDiagnostics: [],
   templateWarnings: input.templateWarnings,
 })

@@ -32,6 +32,7 @@ const baseDiagnostics = {
     changedFileCoverage: 1,
   },
   contextPackageDiagnostics: [],
+  structuralSignals: null,
   templateWarnings: [],
 }
 

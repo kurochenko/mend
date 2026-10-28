@@ -1,13 +1,12 @@
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
-} from '@mariozechner/pi-coding-agent'
-import type { AgentSession, ToolDefinition } from '@mariozechner/pi-coding-agent'
+} from '@earendil-works/pi-coding-agent'
+import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from '@sinclair/typebox'
 import { z } from 'zod'
 import { lookupContext7 } from '@/integrations/context7'
@@ -132,12 +131,11 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const toolMode = config.toolMode ?? 'full'
 
-  const authStorage = AuthStorage.create()
-  const modelRegistry = ModelRegistry.create(authStorage)
+  const modelRuntime = await ModelRuntime.create()
   const agentDir = getAgentDir()
 
   const { provider, modelId } = parseModelString(config.model)
-  const model = modelRegistry.find(provider, modelId)
+  const model = modelRuntime.getModel(provider, modelId)
   if (!model) {
     return {
       success: false,
@@ -180,8 +178,7 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
       sessionManager,
       settingsManager,
       resourceLoader,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
     })
     session = result.session
     abortSession = () => {

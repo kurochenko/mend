@@ -118,6 +118,7 @@ const postOutput = (overrides: Partial<PostStepOutput> = {}): PostStepOutput => 
       changedFileCoverage: 1,
     },
     contextPackageDiagnostics: [],
+    structuralSignals: null,
     templateWarnings: [],
   },
   comparisonResult: null,

@@ -188,7 +188,7 @@ const reviewSchema = z.object({
         .default('auto'),
       label_prefix: z.string().default('ai-review:'),
     })
-    .default({}),
+    .prefault({}),
   flags: z
     .object({
       prompt_templates_v2: z.boolean().default(true),
@@ -198,7 +198,7 @@ const reviewSchema = z.object({
       bug_history: z.boolean().default(true),
       dry_run: z.boolean().default(false),
     })
-    .default({}),
+    .prefault({}),
   intent: z
     .object({
       harness: z.enum(['pi', 'codex']).default('pi'),
@@ -207,7 +207,7 @@ const reviewSchema = z.object({
       timeout_ms: z.number().int().positive().default(45_000),
       failure_policy: z.enum(['mixed', 'fail']).default('mixed'),
     })
-    .default({}),
+    .prefault({}),
   comparison: comparisonSchema,
   memory: reviewMemorySchema,
   triage: reviewTriageSchema,
