@@ -17,6 +17,11 @@ const envSchema = z.object({
 
 export type EnvConfig = z.infer<typeof envSchema>
 
+const defaultIntentModels = {
+  pi: 'openai-codex/gpt-6-luna',
+  codex: 'gpt-6-luna',
+} as const
+
 const triggerSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('ready') }),
   z.object({ mode: z.literal('all') }),
@@ -202,11 +207,15 @@ const reviewSchema = z.object({
   intent: z
     .object({
       harness: z.enum(['pi', 'codex']).default('codex'),
-      model: z.string().default('gpt-6-luna'),
+      model: z.string().optional(),
       thinking_level: z.enum(['off', 'minimal', 'low', 'medium', 'high']).default('minimal'),
       timeout_ms: z.number().int().positive().default(45_000),
       failure_policy: z.enum(['mixed', 'fail']).default('mixed'),
     })
+    .transform((intent) => ({
+      ...intent,
+      model: intent.model ?? defaultIntentModels[intent.harness],
+    }))
     .prefault({}),
   comparison: comparisonSchema,
   memory: reviewMemorySchema,

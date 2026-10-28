@@ -81,6 +81,22 @@ describe('parseProjectsFileConfig', () => {
     expect(config.projects.app?.review.template.label_prefix).toBe('ai-review:')
   })
 
+  test('defaults the intent model to a Pi model id when the Pi harness is selected', () => {
+    const config = parseProjectsFileConfig({
+      projects: {
+        app: {
+          ...baseProject,
+          review: {
+            ...baseProject.review,
+            intent: { harness: 'pi' },
+          },
+        },
+      },
+    })
+
+    expect(config.projects.app?.review.intent.model).toBe('openai-codex/gpt-6-luna')
+  })
+
   test('parses codex intent classifier harness', () => {
     const config = parseProjectsFileConfig({
       projects: {
