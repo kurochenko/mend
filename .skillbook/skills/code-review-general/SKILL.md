@@ -12,9 +12,9 @@ metadata:
 
 Review is read-only unless fixes are requested. Review the requested revision and
 its actual diff against the intended base (incremental changes only unless asked
-otherwise), using the request, Beads ticket, Living Spec primitives, and
-participating code to recover intent. Green checks or another agent's report are
-supporting evidence, not a correctness verdict.
+otherwise), using the request, Beads ticket, and participating code to recover
+intent. Green checks or another agent's report are supporting evidence, not a
+correctness verdict.
 
 ## Scope and depth
 

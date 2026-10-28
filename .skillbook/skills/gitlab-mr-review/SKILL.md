@@ -18,12 +18,11 @@ Accept an MR IID, URL, branch, or recorded Mend review run. If the target is amb
 
 ## Review Workflow
 
-1. Read `AGENTS.md`, `.spec/SPEC.md`, and `.spec/INDEX.md`.
+1. Read `AGENTS.md`.
 2. Identify whether the MR affects review lifecycle, Git provider behavior, DB state, queueing, memory, thread handling, prompt/schema behavior, or deployment tooling.
 3. Inspect the diff and relevant unchanged context.
 4. Check existing MR discussions when available. Do not duplicate unresolved feedback; reference it.
-5. Verify behavior against the Living Spec when primitives exist. If behavior exists without a matching primitive, call that out.
-6. Prioritize correctness, data safety, posting safety, deterministic tests, and maintainability over style.
+5. Prioritize correctness, data safety, posting safety, deterministic tests, and maintainability over style.
 
 ## Mend-Specific Checklist
 
@@ -39,7 +38,7 @@ Accept an MR IID, URL, branch, or recorded Mend review run. If the target is amb
 
 ## Output
 
-Lead with findings, ordered by severity. If no issues are found, say that directly and mention any residual test or spec gaps.
+Lead with findings, ordered by severity. If no issues are found, say that directly and mention any residual test gaps.
 
 Use concise findings with file and line references where possible:
 
