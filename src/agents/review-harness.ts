@@ -28,6 +28,7 @@ export interface ReviewAgentResult {
   sessionFile?: string
   inspectedFiles?: string[]
   error?: string
+  authFailed?: boolean
 }
 
 export interface ReviewAgentHarness {

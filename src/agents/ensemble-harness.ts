@@ -769,6 +769,62 @@ const defaultSubHarnesses = (): Partial<Record<EnsembleSubHarnessId, ReviewAgent
   },
 })
 
+interface AuthFailureGuard {
+  watch: (harness: ReviewAgentHarness) => ReviewAgentHarness
+  failure: () => ReviewAgentResult | null
+}
+
+const createAuthFailureGuard = (parentSignal: AbortSignal | undefined): AuthFailureGuard => {
+  const controller = new AbortController()
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal
+  let firstFailure: ReviewAgentResult | null = null
+
+  return {
+    watch: (harness) => ({
+      id: harness.id,
+      invoke: async (runConfig) => {
+        if (firstFailure) {
+          return {
+            harness: harness.id,
+            model: runConfig.model,
+            success: false,
+            output: '',
+            durationMs: 0,
+            error: 'skipped after another ensemble sub-run failed authentication',
+          }
+        }
+
+        const result = await harness.invoke({ ...runConfig, signal })
+        if (result.authFailed && !firstFailure) {
+          firstFailure = result
+          controller.abort()
+        }
+        return result
+      },
+    }),
+    failure: () => firstFailure,
+  }
+}
+
+const buildAuthFailureResult = (input: {
+  failure: ReviewAgentResult
+  start: number
+  ensembleConfig: ReviewAgentEnsembleConfig
+  observedResults: ReviewAgentResult[]
+  changedFiles: string[]
+}): ReviewAgentResult => ({
+  harness: 'ensemble',
+  model: input.ensembleConfig.synthesizer_model,
+  success: false,
+  output: '',
+  durationMs: Date.now() - input.start,
+  inspectedFiles: mergeInspectedFiles(input.observedResults, input.changedFiles),
+  authFailed: true,
+  error: input.failure.error,
+})
+
 const normalizeDeepSamples = (samples: number): number => {
   if (!Number.isFinite(samples)) {
     return defaultEnsembleConfig.deep_samples
@@ -1130,6 +1186,92 @@ const buildSuccessfulEnsembleResult = (input: {
   inspectedFiles: mergeInspectedFiles(input.observedResults, input.changedFiles),
 })
 
+interface SynthesisStageInput {
+  codexHarness: ReviewAgentHarness
+  authGuard: AuthFailureGuard
+  config: ReviewAgentRunConfig
+  ensembleConfig: ReviewAgentEnsembleConfig
+  reviewMode: EnsembleReviewMode
+  candidates: EnsembleCandidate[]
+  stats: VerificationStats
+  successfulDeepResult: DeepExplorerResult | undefined
+  observedResults: ReviewAgentResult[]
+  start: number
+}
+
+const authFailureResultFor = (input: SynthesisStageInput): ReviewAgentResult | null => {
+  const failure = input.authGuard.failure()
+  return failure
+    ? buildAuthFailureResult({
+        failure,
+        start: input.start,
+        ensembleConfig: input.ensembleConfig,
+        observedResults: input.observedResults,
+        changedFiles: input.config.changedFiles ?? [],
+      })
+    : null
+}
+
+const runSynthesisStage = async (input: SynthesisStageInput): Promise<ReviewAgentResult> => {
+  const stageAuthFailure = authFailureResultFor(input)
+  if (stageAuthFailure) {
+    return stageAuthFailure
+  }
+
+  const { config, ensembleConfig, reviewMode, successfulDeepResult, observedResults, start } = input
+  const changedFiles = config.changedFiles ?? []
+  const policy = {
+    reviewMode,
+    changedFiles,
+    expectedPriorBlockerIds: config.expectedPriorBlockerIds ?? [],
+  }
+
+  try {
+    const synthesizerResult = await invokeSynthesizer({
+      harness: input.codexHarness,
+      config,
+      ensembleConfig,
+      candidates: input.candidates,
+      deepReview: successfulDeepResult?.parsed ?? null,
+      verificationStats: input.stats,
+      reviewMode,
+      observedResults,
+    })
+
+    return buildSuccessfulEnsembleResult({
+      result: applyPolicyToResult(synthesizerResult, policy),
+      start,
+      model: ensembleConfig.synthesizer_model,
+      observedResults,
+      changedFiles,
+    })
+  } catch (error) {
+    console.warn(`[ensemble] synthesizer failed: ${toErrorMessage(error)}`)
+    const synthesizerAuthFailure = authFailureResultFor(input)
+    if (synthesizerAuthFailure) {
+      return synthesizerAuthFailure
+    }
+
+    if (successfulDeepResult?.result?.success && successfulDeepResult.parsed) {
+      return buildSuccessfulEnsembleResult({
+        result: applyPolicyToResult(successfulDeepResult.result, policy),
+        start,
+        model: ensembleConfig.deep_model,
+        observedResults,
+        changedFiles,
+      })
+    }
+
+    return buildSynthesizerFailureResult({
+      start,
+      ensembleConfig,
+      observedResults,
+      changedFiles,
+      error,
+    })
+  }
+}
+
 export const createEnsembleReviewHarness = (options?: {
   config?: Partial<ReviewAgentEnsembleConfig>
   harnesses?: Partial<Record<EnsembleSubHarnessId, ReviewAgentHarness>>
@@ -1142,11 +1284,12 @@ export const createEnsembleReviewHarness = (options?: {
     id: 'ensemble',
     invoke: async (config: ReviewAgentRunConfig): Promise<ReviewAgentResult> => {
       const start = Date.now()
-      const finderHarness = subHarnesses[ensembleConfig.finder_harness]
-      const codexHarness = subHarnesses.codex
+      const authGuard = createAuthFailureGuard(config.signal)
+      const configuredFinderHarness = subHarnesses[ensembleConfig.finder_harness]
+      const finderHarness = configuredFinderHarness && authGuard.watch(configuredFinderHarness)
+      const codexHarness = subHarnesses.codex && authGuard.watch(subHarnesses.codex)
       const observedResults: ReviewAgentResult[] = []
       const changedFiles = config.changedFiles ?? []
-      const expectedPriorBlockerIds = config.expectedPriorBlockerIds ?? []
 
       if (!finderHarness) {
         console.warn(`[ensemble] finder harness not available: ${ensembleConfig.finder_harness}`)
@@ -1165,54 +1308,18 @@ export const createEnsembleReviewHarness = (options?: {
         reviewMode,
         observedResults,
       })
-
-      try {
-        const synthesizerResult = await invokeSynthesizer({
-          harness: codexHarness,
-          config,
-          ensembleConfig,
-          candidates,
-          deepReview: successfulDeepResult?.parsed ?? null,
-          verificationStats: stats,
-          reviewMode,
-          observedResults,
-        })
-
-        return buildSuccessfulEnsembleResult({
-          result: applyPolicyToResult(synthesizerResult, {
-            reviewMode,
-            changedFiles,
-            expectedPriorBlockerIds,
-          }),
-          start,
-          model: ensembleConfig.synthesizer_model,
-          observedResults,
-          changedFiles,
-        })
-      } catch (error) {
-        console.warn(`[ensemble] synthesizer failed: ${toErrorMessage(error)}`)
-        if (successfulDeepResult?.result?.success && successfulDeepResult.parsed) {
-          return buildSuccessfulEnsembleResult({
-            result: applyPolicyToResult(successfulDeepResult.result, {
-              reviewMode,
-              changedFiles,
-              expectedPriorBlockerIds,
-            }),
-            start,
-            model: ensembleConfig.deep_model,
-            observedResults,
-            changedFiles,
-          })
-        }
-
-        return buildSynthesizerFailureResult({
-          start,
-          ensembleConfig,
-          observedResults,
-          changedFiles,
-          error,
-        })
-      }
+      return await runSynthesisStage({
+        codexHarness,
+        authGuard,
+        config,
+        ensembleConfig,
+        reviewMode,
+        candidates,
+        stats,
+        successfulDeepResult,
+        observedResults,
+        start,
+      })
     },
   }
 }

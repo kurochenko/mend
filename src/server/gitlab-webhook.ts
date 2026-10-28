@@ -175,6 +175,38 @@ export const classifyWebhook = (
   }
 }
 
+const handledObjectKinds = new Set(['merge_request', 'note'])
+
+const unhandledObjectKind = (raw: unknown): string | null => {
+  const objectKind =
+    raw !== null && typeof raw === 'object' ? (raw as { object_kind?: unknown }).object_kind : null
+  return typeof objectKind === 'string' && !handledObjectKinds.has(objectKind) ? objectKind : null
+}
+
+type ParsedWebhookBody =
+  | { type: 'invalid'; details?: unknown }
+  | { type: 'unhandled'; objectKind: string }
+  | { type: 'payload'; payload: WebhookPayload; raw: unknown }
+
+const parseWebhookBody = (rawBody: string): ParsedWebhookBody => {
+  let raw: unknown
+  try {
+    raw = JSON.parse(rawBody)
+  } catch {
+    return { type: 'invalid' }
+  }
+
+  const objectKind = unhandledObjectKind(raw)
+  if (objectKind !== null) {
+    return { type: 'unhandled', objectKind }
+  }
+
+  const parseResult = webhookPayloadSchema.safeParse(raw)
+  return parseResult.success
+    ? { type: 'payload', payload: parseResult.data, raw }
+    : { type: 'invalid', details: parseResult.error.issues }
+}
+
 const logWebhookOutcome = (
   projectKey: string,
   gitlabEvent: string | undefined,
@@ -229,19 +261,17 @@ export const createGitlabWebhookRoute = (config: AppConfig, mastra: Mastra) => {
       return c.json({ error: 'unauthorized' }, 401)
     }
 
-    let raw: unknown
-    try {
-      raw = JSON.parse(rawBody)
-    } catch {
+    const parsedBody = parseWebhookBody(rawBody)
+    if (parsedBody.type === 'invalid') {
       logWebhookOutcome(projectKey, gitlabEvent, '400 invalid payload')
-      return c.json({ error: 'invalid payload' }, 400)
+      return c.json({ error: 'invalid payload', details: parsedBody.details }, 400)
     }
-    const parseResult = webhookPayloadSchema.safeParse(raw)
-    if (!parseResult.success) {
-      logWebhookOutcome(projectKey, gitlabEvent, '400 invalid payload')
-      return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
+    if (parsedBody.type === 'unhandled') {
+      const reason = `unhandled object_kind ${JSON.stringify(parsedBody.objectKind)}`
+      logWebhookOutcome(projectKey, gitlabEvent, `200 ignored: ${reason}`)
+      return c.json({ type: 'ignored', reason }, 200)
     }
-    const payload = parseResult.data
+    const { payload, raw } = parsedBody
 
     if (config.env.RECORD_WEBHOOKS && gitlabEvent) {
       recordWebhookPayload({ projectKey, eventKind: payload.object_kind, payload: raw })

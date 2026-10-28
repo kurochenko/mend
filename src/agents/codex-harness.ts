@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { authFailureMessage, extractErrorEventText, isAuthFailure } from '@/agents/auth-failure'
 import { toErrorMessage } from '@/lib/errors'
 import type { ReviewAgentRunConfig, ReviewAgentResult } from '@/agents/review-harness'
 
@@ -73,6 +74,8 @@ export const buildCommand = (
     `default_permissions="${REVIEW_PERMISSION_PROFILE}"`,
     '--config',
     `permissions.${REVIEW_PERMISSION_PROFILE}.filesystem={ ${buildReviewFilesystemPolicy(readRoots)} }`,
+    '--config',
+    'web_search="disabled"',
     '--model',
     config.model,
     '--json',
@@ -209,6 +212,22 @@ const runCodexProcess = async (input: RunCodexProcessInput): Promise<CodexProces
   }
 }
 
+const toExitFailure = (
+  processResult: CodexProcessResult,
+  model: string,
+): Pick<ReviewAgentResult, 'error' | 'authFailed'> => {
+  if (isAuthFailure(`${processResult.stderr}\n${extractErrorEventText(processResult.stdout)}`)) {
+    return {
+      authFailed: true,
+      error: authFailureMessage('Codex', model, 'run `codex login`'),
+    }
+  }
+
+  return {
+    error: `Codex exited with code ${processResult.exitCode}: ${processResult.stderr.trim() || processResult.stdout.trim()}`,
+  }
+}
+
 export const invokeCodexReview = async (
   config: ReviewAgentRunConfig,
 ): Promise<ReviewAgentResult> => {
@@ -281,7 +300,7 @@ export const invokeCodexReview = async (
         durationMs: processResult.durationMs,
         sessionFile: eventsFile,
         inspectedFiles,
-        error: `Codex exited with code ${processResult.exitCode}: ${processResult.stderr.trim() || processResult.stdout.trim()}`,
+        ...toExitFailure(processResult, config.model),
       }
     }
 

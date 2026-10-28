@@ -96,6 +96,23 @@ describe('buildCommand', () => {
     )
     expect(command).not.toContain('--sandbox')
   })
+
+  it('disables web search for every review run', () => {
+    expect(
+      buildCommand(
+        {
+          cwd: '/repo',
+          model: 'gpt-5.5',
+          thinkingLevel: 'medium',
+          instructions: 'Review carefully.',
+          prompt: 'Review this MR.',
+          sessionDir: '/sessions',
+        },
+        '/sessions/out.txt',
+        [],
+      ),
+    ).toContain('web_search="disabled"')
+  })
 })
 
 describe('resolveCodexInstallRoot', () => {
