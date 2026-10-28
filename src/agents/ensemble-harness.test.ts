@@ -624,6 +624,78 @@ describe('createEnsembleReviewHarness', () => {
   })
 })
 
+describe('ensemble auth failures', () => {
+  const authFailure = (model: string): ReviewAgentResult =>
+    createResult({ harness: 'codex', model }, '', {
+      success: false,
+      authFailed: true,
+      error: `Codex is not authenticated for model ${model}; run \`codex login\` as the user running Mend`,
+    })
+
+  it('aborts in-flight sub-runs and skips synthesis when a deep explorer is unauthenticated', async () => {
+    const calls: string[] = []
+    let finderAborts = 0
+    const harness = createRoutingHarness(async (config) => {
+      calls.push(config.sessionDir)
+      if (config.sessionDir.includes('deep-')) {
+        return authFailure('gpt-6.1-sol')
+      }
+      if (config.sessionDir.includes('finder-')) {
+        await new Promise<void>((resolve) => {
+          config.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        finderAborts += 1
+        return createResult({ harness: 'codex', model: 'gpt-6-luna' }, '', {
+          success: false,
+          error: 'Codex review aborted',
+        })
+      }
+      return createResult({ harness: 'codex', model: 'gpt-6.1-sol' }, reviewOutput('Synth summary'))
+    })
+
+    const ensemble = createEnsembleReviewHarness({
+      config: { deep_samples: 1, synthesizer_model: 'gpt-6.1-sol' },
+      harnesses: { codex: harness },
+    })
+    const result = await ensemble.invoke(invokeConfig)
+
+    expect(result).toMatchObject({
+      harness: 'ensemble',
+      success: false,
+      authFailed: true,
+      error:
+        'Codex is not authenticated for model gpt-6.1-sol; run `codex login` as the user running Mend',
+    })
+    expect(finderAborts).toBe(5)
+    expect(calls.some((call) => call.includes('synthesizer'))).toBe(false)
+    expect(calls.some((call) => call.includes('verify-'))).toBe(false)
+  })
+
+  it('returns the auth failure instead of the deep fallback when synthesis is unauthenticated', async () => {
+    const harness = createRoutingHarness((config) => {
+      if (config.sessionDir.includes('finder-')) {
+        return createResult({ harness: 'codex', model: 'gpt-6-luna' }, emptyCandidateOutput())
+      }
+      if (config.sessionDir.includes('deep-')) {
+        return createResult(
+          { harness: 'codex', model: 'gpt-6.1-sol' },
+          reviewOutput('Deep summary'),
+        )
+      }
+      return authFailure('gpt-6.1-sol')
+    })
+
+    const ensemble = createEnsembleReviewHarness({
+      config: { deep_samples: 1 },
+      harnesses: { codex: harness },
+    })
+    const result = await ensemble.invoke(invokeConfig)
+
+    expect(result.success).toBe(false)
+    expect(result.authFailed).toBe(true)
+  })
+})
+
 const policyOutput = (overrides: Partial<ReviewOutputV2> = {}): ReviewOutputV2 => ({
   version: 'v2',
   assessment: 'request_changes',

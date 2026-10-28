@@ -1,3 +1,4 @@
+import { authFailureMessage, extractErrorEventText, isAuthFailure } from '@/agents/auth-failure'
 import { toErrorMessage } from '@/lib/errors'
 
 export interface OpenCodeReviewConfig {
@@ -15,6 +16,7 @@ export interface OpenCodeReviewResult {
   output: string
   durationMs: number
   error?: string
+  authFailed?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 300_000
@@ -112,6 +114,43 @@ export const extractAssistantText = (stdout: string): string => {
   return stdout
 }
 
+interface CompletedOpenCodeRun {
+  exitCode: number
+  stdout: string
+  stderr: string
+  durationMs: number
+  model: string
+}
+
+export const toCompletedRunResult = (run: CompletedOpenCodeRun): OpenCodeReviewResult => {
+  const output = extractAssistantText(run.stdout)
+
+  if (isAuthFailure(`${run.stderr}\n${extractErrorEventText(run.stdout)}`)) {
+    return {
+      success: false,
+      output,
+      durationMs: run.durationMs,
+      authFailed: true,
+      error: authFailureMessage(
+        'OpenCode',
+        run.model,
+        'set the provider API key in .env or run `opencode auth login`',
+      ),
+    }
+  }
+
+  if (run.exitCode !== 0) {
+    return {
+      success: false,
+      output,
+      durationMs: run.durationMs,
+      error: `OpenCode exited with code ${run.exitCode}: ${run.stderr.trim()}`,
+    }
+  }
+
+  return { success: true, output, durationMs: run.durationMs }
+}
+
 export const invokeOpenCodeReview = async (
   config: OpenCodeReviewConfig,
 ): Promise<OpenCodeReviewResult> => {
@@ -176,20 +215,13 @@ export const invokeOpenCodeReview = async (
       }
     }
 
-    if (exitCode !== 0) {
-      return {
-        success: false,
-        output: extractAssistantText(stdoutBuf),
-        durationMs,
-        error: `OpenCode exited with code ${exitCode}: ${stderrBuf.trim()}`,
-      }
-    }
-
-    return {
-      success: true,
-      output: extractAssistantText(stdoutBuf),
+    return toCompletedRunResult({
+      exitCode,
+      stdout: stdoutBuf,
+      stderr: stderrBuf,
       durationMs,
-    }
+      model: config.model,
+    })
   } catch (err) {
     return {
       success: false,

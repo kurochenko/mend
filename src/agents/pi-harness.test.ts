@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
-import { getFinalAssistantError, invokePiReview, loadReviewResources } from '@/agents/pi-harness'
+import {
+  getFinalAssistantError,
+  invokePiReview,
+  loadReviewResources,
+  toPiFailure,
+} from '@/agents/pi-harness'
 
 type SessionMessage = AgentSession['messages'][number]
 
@@ -149,5 +154,26 @@ describe('loadReviewResources', () => {
       'repo conventions',
       'mend instructions',
     ])
+  })
+})
+
+describe('toPiFailure', () => {
+  it('replaces provider auth errors with a login hint', () => {
+    expect(
+      toPiFailure(
+        'OpenAI API error (401): {"message":"Incorrect API key provided: sk-secret.","code":"invalid_api_key"}',
+        'openai/gpt-6-luna',
+      ),
+    ).toEqual({
+      authFailed: true,
+      error:
+        'Pi is not authenticated for model openai/gpt-6-luna; set the provider API key in .env or run `pi` then `/login` as the user running Mend',
+    })
+  })
+
+  it('keeps other errors unchanged', () => {
+    expect(toPiFailure('Pi review timed out after 1000ms', 'openai/gpt-6-luna')).toEqual({
+      error: 'Pi review timed out after 1000ms',
+    })
   })
 })

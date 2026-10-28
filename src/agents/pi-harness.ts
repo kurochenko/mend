@@ -11,6 +11,7 @@ import { Type } from '@sinclair/typebox'
 import { z } from 'zod'
 import { createReadOnlyTools, isInsideRoot } from '@/agents/pi-read-only-tools'
 import { lookupContext7 } from '@/integrations/context7'
+import { authFailureMessage, isAuthFailure } from '@/agents/auth-failure'
 import { toErrorMessage } from '@/lib/errors'
 
 export interface PiReviewConfig {
@@ -31,7 +32,23 @@ export interface PiReviewResult {
   output: string
   sessionFile: string | undefined
   error?: string
+  authFailed?: boolean
 }
+
+export const toPiFailure = (
+  error: string,
+  model: string,
+): Pick<PiReviewResult, 'error' | 'authFailed'> =>
+  isAuthFailure(error)
+    ? {
+        authFailed: true,
+        error: authFailureMessage(
+          'Pi',
+          model,
+          'set the provider API key in .env or run `pi` then `/login`',
+        ),
+      }
+    : { error }
 
 const DEFAULT_TIMEOUT_MS = 1_200_000
 
@@ -231,7 +248,12 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
 
     const assistantError = getFinalAssistantError(session.messages)
     if (assistantError) {
-      return { success: false, output, sessionFile: session.sessionFile, error: assistantError }
+      return {
+        success: false,
+        output,
+        sessionFile: session.sessionFile,
+        ...toPiFailure(assistantError, config.model),
+      }
     }
 
     return {
@@ -248,7 +270,7 @@ export const invokePiReview = async (config: PiReviewConfig): Promise<PiReviewRe
       success: false,
       output,
       sessionFile: session?.sessionFile,
-      error: toErrorMessage(err),
+      ...toPiFailure(toErrorMessage(err), config.model),
     }
   } finally {
     if (abortSession) {

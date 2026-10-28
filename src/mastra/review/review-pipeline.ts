@@ -139,6 +139,7 @@ const createBaseReviewHarnesses = (): Record<BaseReviewAgentHarnessId, ReviewAge
           durationMs: Date.now() - startTime,
           sessionFile: result.sessionFile,
           error: result.error,
+          authFailed: result.authFailed,
         }
       },
     },
@@ -166,6 +167,7 @@ const createBaseReviewHarnesses = (): Record<BaseReviewAgentHarnessId, ReviewAge
           output: result.output,
           durationMs: result.durationMs,
           error: result.error,
+          authFailed: result.authFailed,
         }
       },
     },

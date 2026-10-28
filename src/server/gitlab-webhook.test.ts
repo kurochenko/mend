@@ -504,13 +504,41 @@ describe('gitlab webhook route logging', () => {
     ])
   })
 
-  test('logs an unsupported payload without its body', async () => {
-    const res = await post(JSON.stringify({ object_kind: 'push', ref: 'refs/heads/private' }))
+  test('acknowledges an unhandled event kind without logging its body', async () => {
+    const res = await post(JSON.stringify({ object_kind: 'push', ref: 'refs/heads/private' }), {
+      'X-Gitlab-Token': 'secret',
+      'X-Gitlab-Event': 'Push Hook',
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ type: 'ignored', reason: 'unhandled object_kind "push"' })
+    expect(loggedLines()).toEqual([
+      '[webhook] test-project "Push Hook" 200 ignored: unhandled object_kind "push"',
+    ])
+  })
+
+  test('rejects an unhandled event kind with an invalid token', async () => {
+    const res = await post(JSON.stringify({ object_kind: 'push' }), {
+      'X-Gitlab-Token': 'wrong-token',
+      'X-Gitlab-Event': 'Push Hook',
+    })
+
+    expect(res.status).toBe(401)
+  })
+
+  test('rejects a malformed payload of a handled event kind', async () => {
+    const res = await post(JSON.stringify({ object_kind: 'merge_request' }))
 
     expect(res.status).toBe(400)
     expect(loggedLines()).toEqual([
       '[webhook] test-project "Merge Request Hook" 400 invalid payload',
     ])
+  })
+
+  test('rejects a payload without an object kind', async () => {
+    const res = await post(JSON.stringify({ ref: 'refs/heads/main' }))
+
+    expect(res.status).toBe(400)
   })
 
   test('logs an ignored merge request with its IID and reason', async () => {
