@@ -11,6 +11,7 @@ import { removeWorktree } from '@/integrations/repo'
 import { toErrorMessage } from '@/lib/errors'
 import { mrReviewInputSchema, type MrReviewInput } from '@/lib/review-run-input'
 import { postStepOutputSchema, type PostStepOutput } from '@/mastra/review/run-result'
+import { createReviewRequestContext } from '@/mastra/review/review-abort'
 import { getEffectiveReviewAgentConfig } from '@/mastra/review/review-pipeline'
 
 type MrReviewWorkflowResult = WorkflowResult<any, any, any, any>
@@ -20,6 +21,7 @@ interface ExecuteMrReviewParams {
   input: MrReviewInput
   source: ReviewRunSource
   webhookPayload?: unknown
+  signal?: AbortSignal
 }
 
 interface ExecuteMrReviewResult {
@@ -28,6 +30,8 @@ interface ExecuteMrReviewResult {
   workflowResult: MrReviewWorkflowResult
   output?: PostStepOutput
 }
+
+const supersededReviewError = 'Superseded by a newer commit'
 
 export const applyReviewRunSourceOverrides = (
   input: MrReviewInput,
@@ -63,7 +67,10 @@ export const executeMrReview = async (
   })
 
   try {
-    const workflowResult = await run.start({ inputData: input })
+    const workflowResult = await run.start({
+      inputData: input,
+      requestContext: createReviewRequestContext(params.signal),
+    })
     const durationMs = Date.now() - startedAt
 
     if (workflowResult.status === 'success') {
@@ -89,7 +96,9 @@ export const executeMrReview = async (
       commitSha: input.commitSha,
       workflowRunId,
       durationMs,
-      error: `Workflow status: ${workflowResult.status}`,
+      error: params.signal?.aborted
+        ? supersededReviewError
+        : `Workflow status: ${workflowResult.status}`,
       result: workflowResult,
     })
 
@@ -105,7 +114,7 @@ export const executeMrReview = async (
       commitSha: input.commitSha,
       workflowRunId,
       durationMs,
-      error: toErrorMessage(error),
+      error: params.signal?.aborted ? supersededReviewError : toErrorMessage(error),
     })
     throw error
   } finally {

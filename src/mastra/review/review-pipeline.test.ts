@@ -189,6 +189,55 @@ describe('invokeReviewAgent', () => {
     expect(result.validatedReview.assessment).toBe('approve')
   })
 
+  it('forwards the abort signal to the primary harness and aborts the comparison run', async () => {
+    const abortController = new AbortController()
+    abortController.abort()
+    const primarySignals: Array<AbortSignal | undefined> = []
+    const comparisonSignals: Array<AbortSignal | undefined> = []
+    const primary = createHarness('codex', [{ success: true, output: validReviewOutput }])
+
+    await invokeReviewAgent({
+      project: createProject({
+        agent: { harness: 'codex', model: 'gpt-5' },
+        comparison: { enabled: true, harness: 'opencode', timeout_ms: 300_000 },
+      }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: [],
+      context7ApiKey: null,
+      signal: abortController.signal,
+      harnesses: {
+        codex: {
+          id: 'codex',
+          invoke: async (config) => {
+            primarySignals.push(config.signal)
+            return await primary.invoke(config)
+          },
+        },
+        opencode: {
+          id: 'opencode',
+          invoke: async (config) => {
+            comparisonSignals.push(config.signal)
+            return {
+              harness: 'opencode',
+              model: config.model,
+              success: false,
+              output: '',
+              durationMs: 0,
+              error: 'aborted',
+            }
+          },
+        },
+      },
+    })
+
+    expect(primarySignals).toEqual([abortController.signal])
+    expect(comparisonSignals).toHaveLength(1)
+    expect(comparisonSignals[0]?.aborted).toBe(true)
+  })
+
   it('normalizes non-blocking direct harness output before provider posting', async () => {
     const result = await invokeReviewAgent({
       project: createProject({ agent: { harness: 'codex', model: 'gpt-5' } }),
