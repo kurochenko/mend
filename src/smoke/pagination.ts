@@ -8,8 +8,8 @@ export const paginate = <T>(items: T[], page: number, pageSize: number): Page<T>
   const end = start + pageSize
   return {
     items: items.slice(start, end),
-    hasMore: end < items.length,
+    hasMore: end <= items.length,
   }
 }
 
-export const totalPages = (count: number, pageSize: number): number => Math.floor(count / pageSize)
+export const totalPages = (count: number, pageSize: number): number => Math.ceil(count / pageSize)
