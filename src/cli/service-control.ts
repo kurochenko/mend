@@ -28,19 +28,15 @@ const waitUntilIdle = async (): Promise<void> => {
     dependencies: {
       logStatus: (counts) => {
         console.log(
-          `Waiting for ${counts.reviewQueueEntries} running review queue entr${counts.reviewQueueEntries === 1 ? 'y' : 'ies'} and ${counts.fixBatchEntries} running fix batch entr${counts.fixBatchEntries === 1 ? 'y' : 'ies'} to finish...`,
+          `Waiting for ${counts.reviewQueueEntries} running review queue entr${counts.reviewQueueEntries === 1 ? 'y' : 'ies'} to finish...`,
         )
       },
     },
   })
-  console.log('No running queue entries or fix batches remain.')
+  console.log('No running review queue entries remain.')
 }
 
 const runRestartCommand = async (command: string[]): Promise<void> => {
-  if (command.length === 0) {
-    throw new Error('restart-safe requires a command after --')
-  }
-
   const proc = Bun.spawn(command, {
     stdin: 'inherit',
     stdout: 'inherit',
@@ -53,14 +49,43 @@ const runRestartCommand = async (command: string[]): Promise<void> => {
   }
 }
 
+const SERVICE_CONTROL_COMMANDS = new Set(['status', 'drain', 'resume', 'restart-safe'])
+
+type ServiceControlArgs =
+  | { kind: 'help' }
+  | { kind: 'invalid'; message: string | null }
+  | { kind: 'run'; command: string; args: string[]; restartCommand: string[] }
+
+const parseServiceControlArgs = (args: string[]): ServiceControlArgs => {
+  const separatorIndex = args.indexOf('--')
+  const ownArgs = separatorIndex === -1 ? args : args.slice(0, separatorIndex)
+  const restartCommand = separatorIndex === -1 ? [] : args.slice(separatorIndex + 1)
+  const command = ownArgs[0]
+  if (ownArgs.includes('--help') || ownArgs.includes('-h')) {
+    return { kind: 'help' }
+  }
+  if (!command || !SERVICE_CONTROL_COMMANDS.has(command)) {
+    return { kind: 'invalid', message: null }
+  }
+  if (command === 'restart-safe' && restartCommand.length === 0) {
+    return { kind: 'invalid', message: 'restart-safe requires a command after --' }
+  }
+  return { kind: 'run', command, args: ownArgs, restartCommand }
+}
+
 const main = async (): Promise<void> => {
-  const args = Bun.argv.slice(2)
-  const command = args[0]
-  if (!command) {
+  const parsedArgs = parseServiceControlArgs(Bun.argv.slice(2))
+  if (parsedArgs.kind !== 'run') {
+    if (parsedArgs.kind === 'invalid') {
+      if (parsedArgs.message) {
+        console.error(parsedArgs.message)
+      }
+      process.exitCode = 1
+    }
     printUsage()
-    process.exitCode = 1
     return
   }
+  const { command, args, restartCommand } = parsedArgs
 
   const config = loadConfig()
   await initDb(config.env.DATABASE_URL)
@@ -71,7 +96,7 @@ const main = async (): Promise<void> => {
   }
 
   if (command === 'drain') {
-    await setServiceRuntimeMode('draining')
+    await setServiceRuntimeMode('draining', 'operator')
     console.log('Service mode set to draining.')
     if (args.includes('--wait')) {
       await waitUntilIdle()
@@ -88,13 +113,15 @@ const main = async (): Promise<void> => {
   }
 
   if (command === 'restart-safe') {
-    const separatorIndex = args.indexOf('--')
-    const restartCommand = separatorIndex === -1 ? [] : args.slice(separatorIndex + 1)
-
-    await setServiceRuntimeMode('draining')
+    await setServiceRuntimeMode('draining', 'operator')
     console.log('Service mode set to draining.')
-    await waitUntilIdle()
-    await runRestartCommand(restartCommand)
+    try {
+      await waitUntilIdle()
+      await runRestartCommand(restartCommand)
+    } finally {
+      await setServiceRuntimeMode('running')
+      console.log('Service mode set to running.')
+    }
     return
   }
 

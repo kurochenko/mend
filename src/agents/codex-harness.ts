@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { toErrorMessage } from '@/lib/errors'
 import type { ReviewAgentRunConfig, ReviewAgentResult } from '@/agents/review-harness'
 
@@ -22,14 +22,57 @@ const toCodexReasoningEffort = (
   return thinkingLevel
 }
 
-export const buildCommand = (config: ReviewAgentRunConfig, outputFile: string): string[] => {
+const REVIEW_PERMISSION_PROFILE = 'mend-review'
+
+export const resolveCodexInstallRoot = (
+  findExecutable: (name: string) => string | null = Bun.which,
+): string | null => {
+  const executable = findExecutable('codex')
+  if (!executable) {
+    return null
+  }
+  const realExecutable = realpathSync(executable)
+  return realExecutable.endsWith('.js')
+    ? dirname(dirname(dirname(realExecutable)))
+    : dirname(realExecutable)
+}
+
+export const resolveGitCommonDir = (cwd: string): string | null => {
+  const result = Bun.spawnSync(
+    ['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { stdout: 'pipe', stderr: 'ignore' },
+  )
+  const gitCommonDir = result.stdout.toString().trim()
+  return result.exitCode === 0 && gitCommonDir ? realpathSync(gitCommonDir) : null
+}
+
+const resolveReviewReadRoots = (cwd: string): string[] =>
+  [resolveCodexInstallRoot(), resolveGitCommonDir(cwd)].filter(
+    (root): root is string => root !== null,
+  )
+
+export const buildReviewFilesystemPolicy = (readRoots: string[]): string =>
+  [
+    '":root" = "deny"',
+    '":minimal" = "read"',
+    '":workspace_roots" = "read"',
+    ...readRoots.map((root) => `${JSON.stringify(root)} = "read"`),
+  ].join(', ')
+
+export const buildCommand = (
+  config: ReviewAgentRunConfig,
+  outputFile: string,
+  readRoots: string[] = resolveReviewReadRoots(config.cwd),
+): string[] => {
   const command = [
     'codex',
     'exec',
     '--cd',
     config.cwd,
-    '--sandbox',
-    'read-only',
+    '--config',
+    `default_permissions="${REVIEW_PERMISSION_PROFILE}"`,
+    '--config',
+    `permissions.${REVIEW_PERMISSION_PROFILE}.filesystem={ ${buildReviewFilesystemPolicy(readRoots)} }`,
     '--model',
     config.model,
     '--json',

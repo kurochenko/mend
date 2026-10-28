@@ -17,26 +17,14 @@ const project = {
   review: {
     llm: { model: 'model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'model',
-      thinking_level: 'minimal',
-      timeout_ms: 45_000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
   },
 } satisfies GitLabProjectConfig
 

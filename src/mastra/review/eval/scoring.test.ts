@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  benchmarkExpectationSchema,
   matchExpectedFindings,
   scoreBenchmarkCase,
   scoreReviewOutput,
@@ -76,20 +77,7 @@ const postOutput = (overrides: Partial<PostStepOutput> = {}): PostStepOutput => 
   reviewMode: 'update',
   previousReviewedSha: 'base123',
   previousRunId: 'run-6',
-  reviewIntent: 'feature',
-  reviewIntentConfidence: 0.9,
-  reviewIntentRationale: ['fixture'],
-  reviewTemplateId: 'feature',
-  reviewTemplateSource: 'classifier',
-  meta: {
-    templateId: 'feature',
-    intent: 'feature',
-    confidence: 0.9,
-    selectionSource: 'classifier',
-  },
   featureFlags: {
-    promptTemplatesV2: true,
-    schemaV2: true,
     structuredFindingsPost: true,
     structuralSignals: true,
     bugHistory: true,
@@ -102,10 +90,6 @@ const postOutput = (overrides: Partial<PostStepOutput> = {}): PostStepOutput => 
     changedFileCount: 2,
     diffExcerptChars: 1200,
     diffTruncated: false,
-    intentClassifierModel: 'test-model',
-    intentClassifierDurationMs: 100,
-    intentClassifierFailure: null,
-    intentSecondaryIntents: [],
     agent: {
       harness: 'pi',
       model: 'test-model',
@@ -143,7 +127,6 @@ const postOutput = (overrides: Partial<PostStepOutput> = {}): PostStepOutput => 
     persistedFindingCount: 0,
     dedupedExistingThreadCount: 0,
     suppressedResolvedThreadCount: 0,
-    automaticFixBatchStatus: null,
   },
   posted: 1,
   skipped: 0,
@@ -232,7 +215,7 @@ describe('matchExpectedFindings', () => {
 })
 
 describe('scoreReviewOutput', () => {
-  it('scores recall, forbidden false positives, unmatched items, and verdict accuracy', () => {
+  it('scores recall, forbidden false positives, and unmatched items', () => {
     const score = scoreReviewOutput(
       {
         expectedFindings: [
@@ -256,16 +239,6 @@ describe('scoreReviewOutput', () => {
             pattern: 'variable name',
           },
         ],
-        expectedResolutionVerdicts: [
-          {
-            previousFindingRef: 'prev-1',
-            status: 'fixed',
-          },
-          {
-            previousFindingRef: 'prev-2',
-            status: 'not_fixed',
-          },
-        ],
       },
       reviewOutput(),
     )
@@ -275,8 +248,84 @@ describe('scoreReviewOutput', () => {
     expect(score.unmatchedItems.map((item) => item.title)).toEqual([
       'Refund failures are swallowed here.',
     ])
-    expect(score.verdictAccuracy).toBe(0.5)
     expect(score.passed).toBe(false)
+  })
+
+  it('passes when every expected finding matches and every count check holds', () => {
+    const score = scoreReviewOutput(
+      {
+        minFindings: 1,
+        requiredCategories: ['correctness'],
+        expectedFindings: [{ id: 'payment-await', pattern: 'failed payment' }],
+      },
+      reviewOutput(),
+    )
+
+    expect(score.passed).toBe(true)
+  })
+
+  it.each([
+    ['findingsRange', { maxFindings: 1 }],
+    ['inlineRange', { minInlineComments: 2 }],
+    ['requiredCategories', { requiredCategories: ['security' as const] }],
+  ])('fails when the %s check fails despite full recall', (check, expectation) => {
+    const score = scoreReviewOutput(
+      {
+        ...expectation,
+        expectedFindings: [{ id: 'payment-await', pattern: 'failed payment' }],
+      },
+      reviewOutput(),
+    )
+
+    expect(score.recall).toBe(1)
+    expect(score.diagnostics.checks[check]).toBe(false)
+    expect(score.passed).toBe(false)
+  })
+
+  it('fails the skipped inline limit for posted output', () => {
+    const score = scoreReviewOutput({ maxSkippedInline: 0 }, postOutput({ skipped: 2 }))
+
+    expect(score.diagnostics.checks.skippedInlineLimit).toBe(false)
+    expect(score.passed).toBe(false)
+  })
+})
+
+describe('benchmarkExpectationSchema', () => {
+  it('accepts a full expectation', () => {
+    const parsed = benchmarkExpectationSchema.safeParse({
+      minFindings: 1,
+      requiredCategories: ['correctness'],
+      expectedFindings: [
+        {
+          id: 'payment-await',
+          fileGlob: 'src/payments/**',
+          lineRange: { from: 42, to: 45 },
+          category: 'correctness',
+          pattern: 'missing await|unhandled promise',
+        },
+      ],
+      forbiddenFindings: [{ id: 'style-nit', pattern: 'rename' }],
+    })
+
+    expect(parsed.success).toBe(true)
+  })
+
+  it('rejects resolution verdict expectations with an explanation', () => {
+    const parsed = benchmarkExpectationSchema.safeParse({
+      expectedResolutionVerdicts: [{ previousFindingRef: 'prev-1', status: 'fixed' }],
+    })
+
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.issues[0]?.message).toContain('initial mode')
+  })
+
+  it.each([
+    ['invalid regular expressions', { expectedFindings: [{ id: 'bad', pattern: '(' }] }],
+    ['unknown categories', { requiredCategories: ['style'] }],
+    ['negative counts', { maxFindings: -1 }],
+    ['unknown keys', { minFinding: 1 }],
+  ])('rejects %s', (_label, expectation) => {
+    expect(benchmarkExpectationSchema.safeParse(expectation).success).toBe(false)
   })
 })
 

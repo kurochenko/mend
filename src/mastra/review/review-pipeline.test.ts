@@ -8,12 +8,6 @@ const validReviewOutput = JSON.stringify({
   version: 'v2',
   assessment: 'approve',
   summary: 'No issues found',
-  meta: {
-    templateId: 'mixed',
-    intent: 'mixed',
-    confidence: 1,
-    selectionSource: 'fallback',
-  },
   findings: [],
   inlineComments: [],
 })
@@ -55,26 +49,14 @@ const createProject = (overrides: Partial<ProjectConfig['review']> = {}): Projec
   review: {
     llm: { model: 'legacy-model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'intent-model',
-      thinking_level: 'minimal',
-      timeout_ms: 45_000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
     ...overrides,
   },
 })
@@ -306,7 +288,7 @@ describe('invokeReviewAgent', () => {
   })
 
   it('retries invalid final output once without tools', async () => {
-    const toolModes: Array<'full' | 'none' | undefined> = []
+    const toolModes: Array<'read-only' | 'none' | undefined> = []
     const prompts: string[] = []
     const harness: ReviewAgentHarness = {
       id: 'pi',
@@ -419,6 +401,39 @@ describe('invokeReviewAgent', () => {
     })
 
     expect(observedChangedFiles).toEqual(['src/agents/codex-harness.ts'])
+  })
+
+  it('runs OpenCode once when the harness cannot report inspected files', async () => {
+    let calls = 0
+    const harness: ReviewAgentHarness = {
+      id: 'opencode',
+      invoke: async (config) => {
+        calls += 1
+        return {
+          harness: 'opencode',
+          model: config.model,
+          success: true,
+          output: validReviewOutput,
+          durationMs: 1,
+        }
+      },
+    }
+
+    const result = await invokeReviewAgent({
+      project: createProject({ agent: { harness: 'opencode', model: 'openai/gpt-5' } }),
+      worktreePath: '/tmp/test',
+      sessionDir: '/tmp/test/sessions',
+      instructions: 'review instructions',
+      prompt: 'review prompt',
+      changedFiles: ['src/agents/opencode-harness.ts'],
+      context7ApiKey: null,
+      harnesses: { opencode: harness },
+    })
+
+    expect(calls).toBe(1)
+    expect(result.inspectionResult.templateWarnings).toContain(
+      'inspection enforcement skipped: opencode harness does not report inspected files',
+    )
   })
 
   it('runs ensemble through the review pipeline without inspection retry when it reports changed files', async () => {

@@ -72,19 +72,28 @@ export const exec = async (command: string, args: string[], cwd: string): Promis
   return stdout.trim()
 }
 
+export const buildGitConfigEnv = (config: Record<string, string>): Record<string, string> => {
+  const entries = Object.entries(config)
+  if (entries.length === 0) {
+    return {}
+  }
+  return Object.fromEntries([
+    ['GIT_CONFIG_COUNT', String(entries.length)],
+    ...entries.flatMap(([key, value], index) => [
+      [`GIT_CONFIG_KEY_${index}`, key],
+      [`GIT_CONFIG_VALUE_${index}`, value],
+    ]),
+  ])
+}
+
 export const execGit = async (
   args: string[],
   cwd: string,
   options?: { config?: Record<string, string> },
 ): Promise<string> => {
-  const configArgs = Object.entries(options?.config ?? {}).flatMap(([key, value]) => [
-    '-c',
-    `${key}=${value}`,
-  ])
-  const fullArgs = [...configArgs, ...args]
-  const proc = Bun.spawn(['git', ...fullArgs], {
+  const proc = Bun.spawn(['git', ...args], {
     cwd,
-    env: sanitizeGitEnv(process.env),
+    env: { ...sanitizeGitEnv(process.env), ...buildGitConfigEnv(options?.config ?? {}) },
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -93,7 +102,7 @@ export const execGit = async (
   const [stdout, stderr] = await Promise.all([readPipe(proc.stdout), readPipe(proc.stderr)])
 
   if (exitCode !== 0) {
-    throw new Error(`Command failed (exit ${exitCode}): git ${fullArgs.join(' ')}\n${stderr}`)
+    throw new Error(`Command failed (exit ${exitCode}): git ${args.join(' ')}\n${stderr}`)
   }
 
   return stdout.trim()

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Mastra } from '@mastra/core'
 import type { AppConfig, ProjectConfig } from '@/config'
 import type { ReviewQueueJob, ReviewQueueRecord } from '@/db/review-queue'
@@ -6,6 +6,13 @@ import type { ReviewProvider } from '@/integrations/provider/client'
 import type { MrReviewRequestEvent } from '@/lib/review-events'
 import type { executeMrReview as executeMrReviewFunction } from '@/mastra/run-mr-review'
 import type { syncStatusNote } from '@/server/status-note-sync'
+import * as actualReviewQueueModule from '@/db/review-queue'
+import * as actualServiceRuntimeModule from '@/db/service-runtime'
+import * as actualReviewContextModule from '@/server/review-context'
+
+const actualReviewQueue = { ...actualReviewQueueModule }
+const actualServiceRuntime = { ...actualServiceRuntimeModule }
+const actualReviewContext = { ...actualReviewContextModule }
 
 const mockUpsertPendingReviewRequest =
   mock<(params: { event: MrReviewRequestEvent; payload: unknown }) => Promise<ReviewQueueRecord>>()
@@ -23,7 +30,6 @@ const mockListReviewQueueRecords = mock(() => Promise.resolve<ReviewQueueRecord[
 const mockRecoverReviewQueueAfterRestart = mock(() => Promise.resolve(0))
 const mockSetPendingCommitSha = mock(() => Promise.resolve(null))
 const mockSetRunningCommitSha = mock(() => Promise.resolve())
-const mockUpdateReviewRunResult = mock(() => Promise.resolve())
 
 const mockGetServiceRuntimeMode = mock(() => Promise.resolve<'running' | 'draining'>('running'))
 const mockFetchChangeRequest = mock(() =>
@@ -53,6 +59,7 @@ const fakeProvider: ReviewProvider = {
   fetchDiffRefs: mock(() =>
     Promise.resolve({ baseSha: 'base', headSha: 'head', startSha: 'start' }),
   ),
+  fetchDiffRefsForCommit: mock(() => Promise.resolve(null)),
   fetchChangedFiles: mock(() => Promise.resolve(['src/app.ts'])),
   listNotes: mock(() => Promise.resolve([])),
   createNote: mock(() => Promise.resolve({ id: 1, body: '', author: null })),
@@ -83,13 +90,13 @@ const fakeProvider: ReviewProvider = {
       preExistingDraftCount: 0,
       recoveredDraftCount: 0,
       draftRecoveryAction: 'none' as const,
-      summaryNoteId: 1,
-      summaryReconciled: false,
     }),
   ),
+  publishSummaryNote: mock(async () => ({ id: 1, reconciled: false })),
 }
 const mockCreateReviewProvider = mock(() => fakeProvider)
 const mockSyncStatusNote = mock<typeof syncStatusNote>(() => Promise.resolve(true))
+const mockIsProcessDraining = mock(() => false)
 
 mock.module('@/db/review-queue', () => ({
   upsertPendingReviewRequest: mockUpsertPendingReviewRequest,
@@ -116,6 +123,12 @@ mock.module('@/mastra/run-mr-review', () => ({
   executeMrReview: mockExecuteMrReview,
 }))
 
+afterAll(() => {
+  mock.module('@/db/review-queue', () => actualReviewQueue)
+  mock.module('@/db/service-runtime', () => actualServiceRuntime)
+  mock.module('@/server/review-context', () => actualReviewContext)
+})
+
 const {
   enqueueMrReview,
   hasActiveReviewWorkers,
@@ -139,26 +152,14 @@ const makeProject = (): ProjectConfig => ({
   review: {
     llm: { model: 'test-model', thinking_level: 'medium' },
     agent: { harness: 'pi' },
-    template: { prompt: 'auto', label_prefix: 'ai-review:' },
     flags: {
-      prompt_templates_v2: true,
-      schema_v2: true,
       structured_findings_post: true,
       structural_signals: true,
       bug_history: true,
       dry_run: false,
     },
-    intent: {
-      harness: 'pi',
-      model: 'test-model',
-      thinking_level: 'minimal',
-      timeout_ms: 45000,
-      failure_policy: 'mixed',
-    },
     comparison: { enabled: false, harness: 'opencode', timeout_ms: 300_000 },
     memory: { project_scope_usernames: [] },
-    triage: { trusted_usernames: [] },
-    fix: { enabled: false, automatic: false, max_loops: 3 },
   },
   tools: { context7: {} },
 })
@@ -195,15 +196,6 @@ const makePayload = (sha = 'abc123'): unknown => ({
   object_attributes: {
     last_commit: {
       id: sha,
-    },
-  },
-})
-
-const makeGithubPayload = (sha = 'abc123'): unknown => ({
-  action: 'synchronize',
-  pull_request: {
-    head: {
-      sha,
     },
   },
 })
@@ -267,7 +259,7 @@ const queueDependencies = (): Parameters<typeof enqueueMrReview>[0]['dependencie
   getLatestSuccessfulRun: mockGetLatestSuccessfulRun,
   executeMrReview: mockExecuteMrReview,
   syncStatusNote: mockSyncStatusNote,
-  updateReviewRunResult: mockUpdateReviewRunResult,
+  isProcessDraining: mockIsProcessDraining,
 })
 
 beforeEach(() => {
@@ -280,7 +272,6 @@ beforeEach(() => {
   mockRecoverReviewQueueAfterRestart.mockReset()
   mockSetPendingCommitSha.mockReset()
   mockSetRunningCommitSha.mockReset()
-  mockUpdateReviewRunResult.mockReset()
   mockGetServiceRuntimeMode.mockReset()
   mockFetchChangeRequest.mockReset()
   mockHasSuccessfulRunForSha.mockReset()
@@ -288,6 +279,7 @@ beforeEach(() => {
   mockExecuteMrReview.mockReset()
   mockCreateReviewProvider.mockReset()
   mockSyncStatusNote.mockReset()
+  mockIsProcessDraining.mockReset()
 
   mockUpsertPendingReviewRequest.mockImplementation(async ({ event, payload }) =>
     makeQueueRecord({ pendingEvent: event, pendingPayload: payload }),
@@ -300,7 +292,6 @@ beforeEach(() => {
   mockRecoverReviewQueueAfterRestart.mockImplementation(() => Promise.resolve(0))
   mockSetPendingCommitSha.mockImplementation(() => Promise.resolve(null))
   mockSetRunningCommitSha.mockImplementation(() => Promise.resolve())
-  mockUpdateReviewRunResult.mockImplementation(() => Promise.resolve())
   mockGetServiceRuntimeMode.mockImplementation(() => Promise.resolve('running'))
   mockFetchChangeRequest.mockImplementation(() =>
     Promise.resolve({
@@ -324,6 +315,7 @@ beforeEach(() => {
   )
   mockCreateReviewProvider.mockImplementation(() => fakeProvider)
   mockSyncStatusNote.mockImplementation(() => Promise.resolve(true))
+  mockIsProcessDraining.mockImplementation(() => false)
 })
 
 describe('enqueueMrReview', () => {
@@ -346,6 +338,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event,
     })
 
@@ -361,21 +354,23 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event: makeEvent(),
     })
 
     expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'abc123')
   })
 
-  test('pins GitHub pending work to the webhook head SHA', async () => {
+  test('does not pin pending work when the commit SHA is unknown', async () => {
     await enqueueReview({
       mastra: makeMastra(),
       project: makeProject(),
-      payload: makeGithubPayload('def456'),
+      payload: makePayload(),
       event: makeEvent(),
+      commitSha: null,
     })
 
-    expect(mockSetPendingCommitSha).toHaveBeenCalledWith('test-project', 42, 'def456')
+    expect(mockSetPendingCommitSha).not.toHaveBeenCalled()
   })
 
   test('newer webhook keeps status running when a review is already running', async () => {
@@ -394,6 +389,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload('def456'),
+      commitSha: 'def456',
       event,
     })
 
@@ -425,6 +421,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event,
     })
 
@@ -481,6 +478,7 @@ describe('enqueueMrReview', () => {
         project: makeProject(),
         payload: makePayload('old-sha'),
         event,
+        commitSha: 'old-sha',
       })
 
       for (let attempt = 0; attempt < 20 && !capturedSignal; attempt += 1) {
@@ -511,6 +509,7 @@ describe('enqueueMrReview', () => {
         project: makeProject(),
         payload: makePayload('new-sha'),
         event: makeEvent(),
+        commitSha: 'new-sha',
       })
       await waitForWorker()
 
@@ -533,6 +532,7 @@ describe('enqueueMrReview', () => {
         project: makeProject(),
         payload: makePayload('old-sha'),
         event: makeEvent(),
+        commitSha: 'old-sha',
       })
 
       expect(running.signal()?.aborted).toBe(false)
@@ -548,6 +548,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event: makeEvent(),
     })
 
@@ -561,6 +562,54 @@ describe('enqueueMrReview', () => {
           input.message === 'Queued while service is draining for restart',
       ),
     ).toBe(true)
+  })
+
+  test('in-process shutdown drain queues without starting a review', async () => {
+    mockIsProcessDraining.mockImplementation(() => true)
+
+    await enqueueReview({
+      mastra: makeMastra(),
+      project: makeProject(),
+      payload: makePayload(),
+      commitSha: 'abc123',
+      event: makeEvent(),
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(mockExecuteMrReview).not.toHaveBeenCalled()
+    expect(mockClaimPendingReviewJob).not.toHaveBeenCalled()
+  })
+
+  test('dry run executes the review without touching the provider status note', async () => {
+    const event = makeEvent()
+    const project = makeProject()
+    project.review.flags.dry_run = true
+    mockClaimPendingReviewJob
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          id: 'test-project:42',
+          projectKey: 'test-project',
+          mrIid: 42,
+          event,
+          payload: makePayload(),
+          commitSha: 'abc123',
+        }),
+      )
+      .mockImplementation(() => Promise.resolve(null))
+
+    await enqueueReview({
+      mastra: makeMastra(),
+      project,
+      payload: makePayload(),
+      commitSha: 'abc123',
+      event,
+    })
+
+    await waitForWorker()
+
+    expect(mockExecuteMrReview).toHaveBeenCalledTimes(1)
+    expect(mockSyncStatusNote).not.toHaveBeenCalled()
   })
 
   test('draining after a run leaves pending work queued instead of changing to queued early', async () => {
@@ -596,6 +645,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event,
     })
 
@@ -638,6 +688,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event,
     })
 
@@ -667,6 +718,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event,
     })
 
@@ -722,6 +774,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload('abc123'),
+      commitSha: 'abc123',
       event: firstEvent,
     })
 
@@ -741,6 +794,7 @@ describe('enqueueMrReview', () => {
       mastra: makeMastra(),
       project: makeProject(),
       payload: makePayload(),
+      commitSha: 'abc123',
       event: makeEvent(),
     })
 

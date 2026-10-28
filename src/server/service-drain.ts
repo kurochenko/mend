@@ -1,14 +1,11 @@
-import { listRunnableFixBatches } from '@/db/fix-batches'
 import { countRunningReviewQueueEntries } from '@/db/review-queue'
 
 interface RunningWorkCounts {
   reviewQueueEntries: number
-  fixBatchEntries: number
 }
 
 interface WaitForDrainedWorkDependencies {
   countRunningReviewQueueEntries: () => Promise<number>
-  countRunningFixBatchEntries: () => Promise<number>
   sleep: (ms: number) => Promise<void>
   logStatus?: (counts: RunningWorkCounts) => void
 }
@@ -24,28 +21,17 @@ export const SHUTDOWN_GRACE_PERIOD_MS = 30_000
 const defaultSleep = async (ms: number): Promise<void> =>
   await new Promise((resolve) => setTimeout(resolve, ms))
 
-const countRunningFixBatchEntries = async (): Promise<number> => {
-  const batches = await listRunnableFixBatches()
-  return batches.filter((batch) => batch.status === 'running').length
-}
-
 const defaultDependencies: WaitForDrainedWorkDependencies = {
   countRunningReviewQueueEntries,
-  countRunningFixBatchEntries,
   sleep: defaultSleep,
 }
 
-const hasRunningWork = (counts: RunningWorkCounts): boolean =>
-  counts.reviewQueueEntries > 0 || counts.fixBatchEntries > 0
+const hasRunningWork = (counts: RunningWorkCounts): boolean => counts.reviewQueueEntries > 0
 
 const getRunningWorkCounts = async (
-  dependencies: Pick<
-    WaitForDrainedWorkDependencies,
-    'countRunningReviewQueueEntries' | 'countRunningFixBatchEntries'
-  >,
+  dependencies: Pick<WaitForDrainedWorkDependencies, 'countRunningReviewQueueEntries'>,
 ): Promise<RunningWorkCounts> => ({
   reviewQueueEntries: await dependencies.countRunningReviewQueueEntries(),
-  fixBatchEntries: await dependencies.countRunningFixBatchEntries(),
 })
 
 export const waitForDrainedWork = async (params?: {

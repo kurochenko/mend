@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { GitLabProjectConfig } from '@/config'
-import { gitlabApi, gitlabApiGlobal } from '@/integrations/gitlab/transport'
+import { gitlabApi, gitlabApiGlobal, type GitLabApiOptions } from '@/integrations/gitlab/transport'
 
 export interface DraftNotePosition {
   position_type: 'text'
@@ -20,6 +20,7 @@ interface DraftNote {
 export interface MrDraftNote {
   id: number
   body: string
+  authorId: number | null
 }
 
 export interface GitLabUser {
@@ -43,6 +44,7 @@ const mrDraftNoteSchema = z.object({
   id: z.number(),
   note: z.string().optional(),
   body: z.string().optional(),
+  author_id: z.number().nullable().optional(),
 })
 
 const noteAuthorSchema = z
@@ -141,6 +143,7 @@ export const listMrDraftNotes = async (
       ...data.map((note) => ({
         id: note.id,
         body: note.note ?? note.body ?? '',
+        authorId: note.author_id ?? null,
       })),
     )
 
@@ -213,11 +216,18 @@ export const createMrNote = async (
   project: GitLabProjectConfig,
   mrIid: number,
   body: string,
+  options?: GitLabApiOptions,
 ): Promise<MrNote> => {
-  const res = await gitlabApi(project, `/merge_requests/${mrIid}/notes`, {
-    method: 'POST',
-    body: JSON.stringify({ body }),
-  })
+  const res = await gitlabApi(
+    project,
+    `/merge_requests/${mrIid}/notes`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    },
+    undefined,
+    options,
+  )
   const data = noteSchema.parse(await res.json())
   return {
     id: data.id,

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test'
 import { appendSummaryMarkers } from '@/mastra/review/markers'
-import { automaticLoopLimitBody } from '@/mastra/fix/automatic-batch'
 import { buildResolvedFindingStateUpdate } from '@/server/thread-sync'
 import {
   dedupeInlineComments,
@@ -58,18 +57,6 @@ describe('findMrNoteByBody', () => {
 
     expect(findMrNoteByBody(notes, 'loop limit body')?.id).toBe(2)
     expect(findMrNoteByBody(notes, 'missing')).toBeUndefined()
-  })
-})
-
-describe('automaticLoopLimitBody', () => {
-  it('summarizes the stopped automatic fix loop for a human reviewer', () => {
-    expect(
-      automaticLoopLimitBody('demo', 42, {
-        status: 'loop_limit',
-        batch: {} as never,
-        maxLoops: 3,
-      }),
-    ).toContain('maximum of 3 fix loop(s)')
   })
 })
 

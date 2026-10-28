@@ -139,7 +139,7 @@ export const generateThreadReply = async (params: GenerateThreadReplyParams): Pr
       instructions: SYSTEM_INSTRUCTIONS,
       prompt,
       timeoutMs: REPLY_TIMEOUT_MS,
-      toolMode: 'full',
+      toolMode: 'read-only',
     })
 
     if (!result.success) {

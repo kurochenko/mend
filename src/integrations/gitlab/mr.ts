@@ -76,6 +76,43 @@ export const fetchMrDiffRefs = async (
   return { diffRefs: data.diff_refs }
 }
 
+const gitlabMrVersionSchema = z.object({
+  head_commit_sha: z.string(),
+  base_commit_sha: z.string(),
+  start_commit_sha: z.string(),
+})
+
+export const fetchMrVersionDiffRefs = async (
+  project: GitLabProjectConfig,
+  mrIid: number,
+  headSha: string,
+): Promise<DiffRefs | null> => {
+  let page = 1
+
+  for (;;) {
+    const res = await gitlabApi(
+      project,
+      `/merge_requests/${mrIid}/versions?per_page=100&page=${page}`,
+    )
+    const versions = z.array(gitlabMrVersionSchema).parse(await res.json())
+    const match = versions.find((version) => version.head_commit_sha === headSha)
+    if (match) {
+      return {
+        base_sha: match.base_commit_sha,
+        head_sha: match.head_commit_sha,
+        start_sha: match.start_commit_sha,
+      }
+    }
+
+    const nextPage = res.headers.get('x-next-page')
+    if (!nextPage) {
+      return null
+    }
+
+    page = Number(nextPage)
+  }
+}
+
 const dedupePaths = (paths: string[]): string[] => {
   const out: string[] = []
   const seen = new Set<string>()

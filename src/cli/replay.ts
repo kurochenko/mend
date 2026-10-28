@@ -5,10 +5,12 @@ import { closeDb, initDb } from '@/db/client'
 import { getReviewRun } from '@/db/review-runs'
 import { createReviewProvider } from '@/integrations/provider/client'
 import type { ChangeRequestDetails } from '@/integrations/provider/types'
+import { toErrorMessage } from '@/lib/errors'
 import { assertCommitSha } from '@/lib/exec'
 import { mrReviewInputSchema, type MrReviewInput } from '@/lib/review-run-input'
 import type { ReviewRunSource } from '@/db/review-runs'
 import {
+  benchmarkExpectationSchema,
   scoreBenchmarkCase,
   type BenchmarkCase,
   type BenchmarkCaseScore,
@@ -25,66 +27,8 @@ const printUsage = (): void => {
   console.log(
     '   or: bun run replay --benchmark <config.json> [--out <report.json>] [--compare <baseline.json>] [--json]',
   )
+  console.log('   or: bun run replay --help')
 }
-
-const reviewCategorySchema = z.enum([
-  'correctness',
-  'architecture',
-  'duplication',
-  'convention',
-  'dead_code',
-  'performance',
-  'security',
-  'testing',
-])
-
-const resolutionVerdictStatusSchema = z.enum([
-  'fixed',
-  'not_fixed',
-  'partially_fixed',
-  'cannot_determine',
-])
-
-const benchmarkExpectationSchema: z.ZodType<BenchmarkExpectation> = z
-  .object({
-    minFindings: z.number().optional(),
-    maxFindings: z.number().optional(),
-    minInlineComments: z.number().optional(),
-    maxInlineComments: z.number().optional(),
-    requiredCategories: z.array(reviewCategorySchema).optional(),
-    maxSkippedInline: z.number().optional(),
-    expectedFindings: z
-      .array(
-        z.object({
-          id: z.string(),
-          fileGlob: z.string(),
-          lineRange: z.object({ from: z.number(), to: z.number() }).optional(),
-          category: reviewCategorySchema.optional(),
-          pattern: z.string(),
-          note: z.string().optional(),
-        }),
-      )
-      .optional(),
-    forbiddenFindings: z
-      .array(
-        z.object({
-          id: z.string(),
-          fileGlob: z.string().optional(),
-          pattern: z.string(),
-          note: z.string().optional(),
-        }),
-      )
-      .optional(),
-    expectedResolutionVerdicts: z
-      .array(
-        z.object({
-          previousFindingRef: z.string(),
-          status: resolutionVerdictStatusSchema,
-        }),
-      )
-      .optional(),
-  })
-  .strict()
 
 const benchmarkCaseSchema = z
   .object({
@@ -118,6 +62,22 @@ const benchmarkConfigFileSchema = z
 
 type BenchmarkConfigFile = z.infer<typeof benchmarkConfigFileSchema>
 
+type ResolvedBenchmarkCase = BenchmarkCase & { expectation: BenchmarkExpectation }
+
+interface BenchmarkOptions {
+  configPath: string
+  outPath?: string
+  comparePath?: string
+  json: boolean
+}
+
+type ReplayCommand =
+  | { kind: 'help' }
+  | { kind: 'invalid' }
+  | { kind: 'run'; runId: string }
+  | { kind: 'benchmark'; options: BenchmarkOptions }
+  | { kind: 'mr'; projectKey: string; mrIid: number }
+
 interface BenchmarkReport {
   generatedAt: string
   cases: BenchmarkCaseScore[]
@@ -127,25 +87,16 @@ interface BenchmarkReport {
   failed: number
 }
 
-interface BenchmarkAggregate {
+interface HarnessAggregate {
   recall: number
   matchedExpected: number
   totalExpected: number
   falsePositiveHits: number
   unmatchedItems: number
-  verdictAccuracy: number | null
-  verdictCorrect: number
-  verdictExpected: number
-  comparison?: {
-    recall: number
-    matchedExpected: number
-    totalExpected: number
-    falsePositiveHits: number
-    unmatchedItems: number
-    verdictAccuracy: number | null
-    verdictCorrect: number
-    verdictExpected: number
-  }
+}
+
+interface BenchmarkAggregate extends HarnessAggregate {
+  comparison?: HarnessAggregate
 }
 
 interface ReplayExecution {
@@ -155,8 +106,8 @@ interface ReplayExecution {
 }
 
 const parseMrIid = (value: string): number => {
-  const parsed = Number.parseInt(value, 10)
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = /^\d+$/.test(value) ? Number(value) : Number.NaN
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid mr-iid: ${value}`)
   }
   return parsed
@@ -230,7 +181,6 @@ const executeReplayFromMr = async (
 const printReplayOutput = (output: PostStepOutput): void => {
   console.log(`MR: ${output.projectKey}!${output.mrIid}`)
   console.log(`Commit: ${output.commitSha}`)
-  console.log(`Template: ${output.reviewTemplateId} (${output.reviewTemplateSource})`)
   console.log(`Assessment: ${output.assessment}`)
   console.log(`Findings: ${output.findings.length}`)
   console.log(`Inline comments: ${output.inlineComments.length}`)
@@ -286,16 +236,19 @@ const runReplayFromRun = async (runId: string): Promise<void> => {
   printReplayOutput(execution.output)
 }
 
-const parseBenchmarkArgs = (
-  args: string[],
-): {
-  configPath: string
-  outPath?: string
-  comparePath?: string
-  json: boolean
-} => {
+const isHelpArg = (arg: string): boolean => arg === '--help' || arg === '-h'
+
+const requireOptionValue = (args: string[], index: number, option: string): string => {
+  const value = args[index + 1]
+  if (!value || value.startsWith('-')) {
+    throw new Error(`Missing value for ${option}`)
+  }
+  return value
+}
+
+const parseBenchmarkArgs = (args: string[]): BenchmarkOptions => {
   const configPath = args[1]
-  if (!configPath) {
+  if (!configPath || configPath.startsWith('-')) {
     throw new Error('Missing benchmark config path')
   }
 
@@ -306,12 +259,12 @@ const parseBenchmarkArgs = (
   for (let i = 2; i < args.length; i++) {
     const arg = args[i]
     if (arg === '--out') {
-      outPath = args[i + 1]
+      outPath = requireOptionValue(args, i, arg)
       i++
       continue
     }
     if (arg === '--compare') {
-      comparePath = args[i + 1]
+      comparePath = requireOptionValue(args, i, arg)
       i++
       continue
     }
@@ -323,6 +276,23 @@ const parseBenchmarkArgs = (
   }
 
   return { configPath, outPath, comparePath, json }
+}
+
+export const parseReplayArgs = (args: string[]): ReplayCommand => {
+  if (args.some(isHelpArg)) {
+    return { kind: 'help' }
+  }
+  const [first, second] = args
+  if (first === '--benchmark') {
+    return { kind: 'benchmark', options: parseBenchmarkArgs(args) }
+  }
+  if (first === '--run') {
+    return second && args.length === 2 ? { kind: 'run', runId: second } : { kind: 'invalid' }
+  }
+  if (!first || !second || args.length !== 2 || first.startsWith('-')) {
+    return { kind: 'invalid' }
+  }
+  return { kind: 'mr', projectKey: first, mrIid: parseMrIid(second) }
 }
 
 export const loadBenchmarkConfig = async (configPath: string): Promise<BenchmarkConfigFile> => {
@@ -337,13 +307,22 @@ export const loadBenchmarkConfig = async (configPath: string): Promise<Benchmark
 
   const parsed = benchmarkConfigFileSchema.safeParse(await configFile.json())
   if (!parsed.success) {
-    throw new Error(`Invalid benchmark config ${configPath}: ${parsed.error.message}`)
+    throw new Error(`Invalid benchmark config ${configPath}:\n${z.prettifyError(parsed.error)}`)
   }
   if (parsed.data.cases.length === 0) {
     throw new Error('Benchmark config must include at least one case')
   }
 
   return parsed.data
+}
+
+const benchmarkExpectationPath = (testCase: BenchmarkCase, configPath: string): string => {
+  if (!testCase.expectationPath) {
+    return join('fixtures', 'expectations', `${testCase.name}.json`)
+  }
+  return isAbsolute(testCase.expectationPath)
+    ? testCase.expectationPath
+    : join(dirname(configPath), testCase.expectationPath)
 }
 
 const loadBenchmarkExpectation = async (
@@ -354,17 +333,44 @@ const loadBenchmarkExpectation = async (
     return testCase.expectation
   }
 
-  const configDir = dirname(configPath)
-  const expectationPath = testCase.expectationPath
-    ? isAbsolute(testCase.expectationPath)
-      ? testCase.expectationPath
-      : join(configDir, testCase.expectationPath)
-    : join('fixtures', 'expectations', `${testCase.name}.json`)
+  const expectationPath = benchmarkExpectationPath(testCase, configPath)
   const expectationFile = Bun.file(expectationPath)
   if (!(await expectationFile.exists())) {
     throw new Error(`Missing expectation for benchmark case ${testCase.name}: ${expectationPath}`)
   }
-  return (await expectationFile.json()) as BenchmarkExpectation
+  let raw: unknown
+  try {
+    raw = await expectationFile.json()
+  } catch (error) {
+    throw new Error(
+      `Invalid JSON in expectation for benchmark case ${testCase.name}: ${expectationPath}`,
+      { cause: error },
+    )
+  }
+  const parsed = benchmarkExpectationSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid expectation for benchmark case ${testCase.name} (${expectationPath}):\n${z.prettifyError(parsed.error)}`,
+    )
+  }
+  return parsed.data
+}
+
+export const loadBenchmarkSuite = async (configPath: string): Promise<ResolvedBenchmarkCase[]> => {
+  const configFile = await loadBenchmarkConfig(configPath)
+  const results = await Promise.allSettled(
+    configFile.cases.map(async (testCase) => ({
+      ...testCase,
+      expectation: await loadBenchmarkExpectation(testCase, configPath),
+    })),
+  )
+  const errors = results.flatMap((result) =>
+    result.status === 'rejected' ? [toErrorMessage(result.reason)] : [],
+  )
+  if (errors.length > 0) {
+    throw new Error(`Benchmark expectations are invalid:\n${errors.join('\n')}`)
+  }
+  return results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
 }
 
 const computeOverallScore = (cases: BenchmarkCaseScore[]): number => {
@@ -375,74 +381,50 @@ const computeOverallScore = (cases: BenchmarkCaseScore[]): number => {
   return Math.round(total / cases.length)
 }
 
-const aggregateScores = (cases: BenchmarkCaseScore[]): BenchmarkAggregate => {
-  const matchedExpected = cases.reduce((sum, item) => sum + item.primary.matchedExpected, 0)
-  const totalExpected = cases.reduce((sum, item) => sum + item.primary.totalExpected, 0)
-  const verdictCorrect = cases.reduce((sum, item) => sum + item.primary.verdicts.correct, 0)
-  const verdictExpected = cases.reduce((sum, item) => sum + item.primary.verdicts.expected, 0)
-  const comparisonCases = cases.filter((item) => item.comparison)
-  const comparisonMatchedExpected = comparisonCases.reduce(
-    (sum, item) => sum + (item.comparison?.matchedExpected ?? 0),
-    0,
-  )
-  const comparisonTotalExpected = comparisonCases.reduce(
-    (sum, item) => sum + (item.comparison?.totalExpected ?? 0),
-    0,
-  )
-  const comparisonVerdictCorrect = comparisonCases.reduce(
-    (sum, item) => sum + (item.comparison?.verdicts.correct ?? 0),
-    0,
-  )
-  const comparisonVerdictExpected = comparisonCases.reduce(
-    (sum, item) => sum + (item.comparison?.verdicts.expected ?? 0),
-    0,
-  )
-
+const aggregateHarness = (scores: BenchmarkCaseScore['primary'][]): HarnessAggregate => {
+  const matchedExpected = scores.reduce((sum, item) => sum + item.matchedExpected, 0)
+  const totalExpected = scores.reduce((sum, item) => sum + item.totalExpected, 0)
   return {
     recall: totalExpected === 0 ? 1 : matchedExpected / totalExpected,
     matchedExpected,
     totalExpected,
-    falsePositiveHits: cases.reduce((sum, item) => sum + item.primary.falsePositiveHits.length, 0),
-    unmatchedItems: cases.reduce((sum, item) => sum + item.primary.unmatchedItems.length, 0),
-    verdictAccuracy: verdictExpected === 0 ? null : verdictCorrect / verdictExpected,
-    verdictCorrect,
-    verdictExpected,
-    comparison:
-      comparisonCases.length === 0
-        ? undefined
-        : {
-            recall:
-              comparisonTotalExpected === 0
-                ? 1
-                : comparisonMatchedExpected / comparisonTotalExpected,
-            matchedExpected: comparisonMatchedExpected,
-            totalExpected: comparisonTotalExpected,
-            falsePositiveHits: comparisonCases.reduce(
-              (sum, item) => sum + (item.comparison?.falsePositiveHits.length ?? 0),
-              0,
-            ),
-            unmatchedItems: comparisonCases.reduce(
-              (sum, item) => sum + (item.comparison?.unmatchedItems.length ?? 0),
-              0,
-            ),
-            verdictAccuracy:
-              comparisonVerdictExpected === 0
-                ? null
-                : comparisonVerdictCorrect / comparisonVerdictExpected,
-            verdictCorrect: comparisonVerdictCorrect,
-            verdictExpected: comparisonVerdictExpected,
-          },
+    falsePositiveHits: scores.reduce((sum, item) => sum + item.falsePositiveHits.length, 0),
+    unmatchedItems: scores.reduce((sum, item) => sum + item.unmatchedItems.length, 0),
   }
 }
+
+const aggregateScores = (cases: BenchmarkCaseScore[]): BenchmarkAggregate => {
+  const comparisonScores = cases.flatMap((item) => (item.comparison ? [item.comparison] : []))
+  return {
+    ...aggregateHarness(cases.map((item) => item.primary)),
+    comparison: comparisonScores.length === 0 ? undefined : aggregateHarness(comparisonScores),
+  }
+}
+
+const buildBenchmarkReport = (
+  scores: BenchmarkCaseScore[],
+  generatedAt: Date,
+): BenchmarkReport => ({
+  generatedAt: generatedAt.toISOString(),
+  cases: scores,
+  aggregate: aggregateScores(scores),
+  overallScore: computeOverallScore(scores),
+  passed: scores.filter((item) => item.passed).length,
+  failed: scores.filter((item) => !item.passed).length,
+})
 
 const formatRatio = (value: number): string => `${Math.round(value * 100)}%`
 
 const printHarnessScore = (label: string, score: BenchmarkCaseScore['primary']): void => {
   console.log(
-    `- ${label}: recall ${formatRatio(score.recall)} (${score.matchedExpected}/${score.totalExpected}), false positives ${score.falsePositiveHits.length}, unmatched ${score.unmatchedItems.length}, verdict accuracy ${
-      score.verdictAccuracy === null ? '-' : formatRatio(score.verdictAccuracy)
-    }`,
+    `- ${label}: ${score.passed ? 'passed' : 'failed'}, recall ${formatRatio(score.recall)} (${score.matchedExpected}/${score.totalExpected}), false positives ${score.falsePositiveHits.length}, unmatched ${score.unmatchedItems.length}`,
   )
+  const failedChecks = Object.entries(score.diagnostics.checks)
+    .filter(([, passed]) => !passed)
+    .map(([check]) => check)
+  if (failedChecks.length > 0) {
+    console.log(`  failed checks: ${failedChecks.join(', ')}`)
+  }
   if (score.missedExpected.length > 0) {
     console.log(`  missed: ${score.missedExpected.join(', ')}`)
   }
@@ -476,11 +458,10 @@ const printBenchmarkDelta = (current: BenchmarkReport, baseline: BenchmarkReport
 }
 
 const runBenchmarkCase = async (params: {
-  testCase: BenchmarkCase
-  configPath: string
+  testCase: ResolvedBenchmarkCase
   json: boolean
 }): Promise<BenchmarkCaseScore> => {
-  const { testCase, configPath, json } = params
+  const { testCase, json } = params
   if (!json) {
     console.log(
       `Running benchmark case: ${testCase.name} (${testCase.projectKey}!${testCase.mrIid})`,
@@ -490,8 +471,7 @@ const runBenchmarkCase = async (params: {
     commitSha: testCase.commitSha,
     source: 'replay_benchmark',
   })
-  const expectation = await loadBenchmarkExpectation(testCase, configPath)
-  const score = scoreBenchmarkCase({ ...testCase, expectation }, execution.output)
+  const score = scoreBenchmarkCase(testCase, execution.output)
   if (!json) {
     printHarnessScore('primary', score.primary)
     if (score.comparison) {
@@ -504,51 +484,42 @@ const runBenchmarkCase = async (params: {
   return score
 }
 
-const runBenchmark = async (args: string[]): Promise<void> => {
-  const { configPath, outPath, comparePath, json } = parseBenchmarkArgs(args)
-  const configFile = await loadBenchmarkConfig(configPath)
+const printBenchmarkSummary = (report: BenchmarkReport): void => {
+  console.log(
+    `Benchmark primary recall: ${formatRatio(report.aggregate.recall)} (${report.aggregate.matchedExpected}/${report.aggregate.totalExpected})`,
+  )
+  console.log(`Benchmark primary false positives: ${report.aggregate.falsePositiveHits}`)
+  console.log(`Benchmark primary unmatched: ${report.aggregate.unmatchedItems}`)
+  if (report.aggregate.comparison) {
+    console.log(
+      `Benchmark comparison recall: ${formatRatio(report.aggregate.comparison.recall)} (${report.aggregate.comparison.matchedExpected}/${report.aggregate.comparison.totalExpected})`,
+    )
+    console.log(
+      `Benchmark comparison false positives: ${report.aggregate.comparison.falsePositiveHits}`,
+    )
+    console.log(`Benchmark comparison unmatched: ${report.aggregate.comparison.unmatchedItems}`)
+  }
+  console.log(`Benchmark passed: ${report.passed}`)
+  console.log(`Benchmark failed: ${report.failed}`)
+}
 
+const runBenchmark = async (
+  options: BenchmarkOptions,
+  cases: ResolvedBenchmarkCase[],
+): Promise<void> => {
+  const { outPath, comparePath, json } = options
   const scores: BenchmarkCaseScore[] = []
 
-  for (const testCase of configFile.cases) {
-    scores.push(await runBenchmarkCase({ testCase, configPath, json }))
+  for (const testCase of cases) {
+    scores.push(await runBenchmarkCase({ testCase, json }))
   }
 
-  const report: BenchmarkReport = {
-    generatedAt: new Date().toISOString(),
-    cases: scores,
-    aggregate: aggregateScores(scores),
-    overallScore: computeOverallScore(scores),
-    passed: scores.filter((item) => item.passed).length,
-    failed: scores.filter((item) => !item.passed).length,
-  }
+  const report = buildBenchmarkReport(scores, new Date())
 
   if (json) {
-    console.log(JSON.stringify(report, null, 2))
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
   } else {
-    console.log(
-      `Benchmark primary recall: ${formatRatio(report.aggregate.recall)} (${report.aggregate.matchedExpected}/${report.aggregate.totalExpected})`,
-    )
-    console.log(`Benchmark primary false positives: ${report.aggregate.falsePositiveHits}`)
-    console.log(`Benchmark primary unmatched: ${report.aggregate.unmatchedItems}`)
-    console.log(
-      `Benchmark primary verdict accuracy: ${
-        report.aggregate.verdictAccuracy === null
-          ? '-'
-          : formatRatio(report.aggregate.verdictAccuracy)
-      }`,
-    )
-    if (report.aggregate.comparison) {
-      console.log(
-        `Benchmark comparison recall: ${formatRatio(report.aggregate.comparison.recall)} (${report.aggregate.comparison.matchedExpected}/${report.aggregate.comparison.totalExpected})`,
-      )
-      console.log(
-        `Benchmark comparison false positives: ${report.aggregate.comparison.falsePositiveHits}`,
-      )
-      console.log(`Benchmark comparison unmatched: ${report.aggregate.comparison.unmatchedItems}`)
-    }
-    console.log(`Benchmark passed: ${report.passed}`)
-    console.log(`Benchmark failed: ${report.failed}`)
+    printBenchmarkSummary(report)
   }
 
   if (outPath) {
@@ -558,56 +529,55 @@ const runBenchmark = async (args: string[]): Promise<void> => {
     }
   }
 
-  if (comparePath) {
+  if (comparePath && !json) {
     const baseline = (await Bun.file(comparePath).json()) as BenchmarkReport
-    if (!json) {
-      printBenchmarkDelta(report, baseline)
-    }
+    printBenchmarkDelta(report, baseline)
+  }
+
+  if (report.failed > 0) {
+    process.exitCode = 1
   }
 }
 
-const main = async (): Promise<void> => {
-  const args = Bun.argv.slice(2)
+const routeConsoleToStderr = (): void => {
+  console.log = console.error
+  console.info = console.error
+  console.debug = console.error
+}
 
-  if (args.length === 0) {
+const main = async (): Promise<void> => {
+  const command = parseReplayArgs(Bun.argv.slice(2))
+
+  if (command.kind === 'help') {
+    printUsage()
+    return
+  }
+  if (command.kind === 'invalid') {
     printUsage()
     process.exitCode = 1
+    return
+  }
+
+  if (command.kind === 'benchmark') {
+    if (command.options.json) {
+      routeConsoleToStderr()
+    }
+    const cases = await loadBenchmarkSuite(command.options.configPath)
+    const config = loadConfig()
+    await initDb(config.env.DATABASE_URL)
+    await runBenchmark(command.options, cases)
     return
   }
 
   const config = loadConfig()
   await initDb(config.env.DATABASE_URL)
 
-  if (args[0] === '--run') {
-    const runId = args[1]
-    if (!runId || args.length !== 2) {
-      printUsage()
-      process.exitCode = 1
-      return
-    }
-    await runReplayFromRun(runId)
+  if (command.kind === 'run') {
+    await runReplayFromRun(command.runId)
     return
   }
 
-  if (args[0] === '--benchmark') {
-    await runBenchmark(args)
-    return
-  }
-
-  if (args.length !== 2) {
-    printUsage()
-    process.exitCode = 1
-    return
-  }
-
-  const projectKey = args[0]
-  const rawMrIid = args[1]
-  if (!projectKey || !rawMrIid) {
-    printUsage()
-    process.exitCode = 1
-    return
-  }
-  await runReplayFromMr(projectKey, parseMrIid(rawMrIid))
+  await runReplayFromMr(command.projectKey, command.mrIid)
 }
 
 if (import.meta.main) {

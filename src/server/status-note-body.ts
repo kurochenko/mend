@@ -1,11 +1,6 @@
 import { getProject } from '@/config'
-import { getFixBatchRecord, type FixBatchRecord } from '@/db/fix-batches'
-import {
-  countReviewFindingSeveritiesForMr,
-  countReviewFindingsByStateForMr,
-} from '@/db/review-findings'
+import { countReviewFindingSeveritiesForMr } from '@/db/review-findings'
 import { listReviewRuns, type ReviewRunRecord } from '@/db/review-runs'
-import type { ReviewFindingState } from '@/db/schema'
 import type { MrReviewRequestEvent } from '@/lib/review-events'
 import { getEffectiveReviewAgentConfig } from '@/mastra/review/review-pipeline'
 
@@ -42,31 +37,6 @@ interface StatusHistoryRow {
   findings: FindingSeverityCounts | null
   startedAt: string | null
   durationMs: number | null
-}
-
-const FINDING_STATE_LABELS: Array<[ReviewFindingState, string]> = [
-  ['pending', 'Pending'],
-  ['accepted', 'Accepted'],
-  ['rejected', 'Rejected'],
-  ['deferred', 'Deferred'],
-  ['fixed', 'Fixed'],
-  ['not_fixed', 'Not fixed'],
-  ['resolved', 'Resolved'],
-]
-
-const fixBatchStatusLabel = (batch: FixBatchRecord): string => {
-  switch (batch.status) {
-    case 'pending':
-      return '🕒 Queued'
-    case 'running':
-      return '⏳ Running'
-    case 'completed':
-      return '✅ Completed'
-    case 'failed':
-      return '❌ Failed'
-  }
-
-  throw new Error(`Unsupported fix batch status: ${batch.status}`)
 }
 
 const stateOutcomeLabel = (state: StatusState): string => {
@@ -342,24 +312,6 @@ const renderHistoryLimitNotice = (truncated: boolean): string[] => {
   return ['', `Showing the latest ${STATUS_HISTORY_RUN_LIMIT} persisted runs.`]
 }
 
-const renderFindingDecisionCounts = (
-  counts: Partial<Record<ReviewFindingState, number>> | undefined,
-): string[] => {
-  const total = Object.values(counts ?? {}).reduce((sum, value) => sum + (value ?? 0), 0)
-  if (total === 0) {
-    return []
-  }
-
-  return [
-    '',
-    '### Finding Decisions',
-    '',
-    `| ${FINDING_STATE_LABELS.map(([, label]) => label).join(' | ')} |`,
-    `| ${FINDING_STATE_LABELS.map(() => '---:').join(' | ')} |`,
-    `| ${FINDING_STATE_LABELS.map(([state]) => counts?.[state] ?? 0).join(' | ')} |`,
-  ]
-}
-
 const renderReviewConfig = (reviewConfig: StatusNoteReviewConfig | undefined): string[] => {
   if (!reviewConfig) {
     return []
@@ -383,26 +335,6 @@ const renderTrackedFindingSeverityCounts = (
     '',
     `**Findings by severity (tracked on MR):** ${total} · ${counts.bug}🐞 ${counts.security}🔒 ${counts.performance}⚡ ${counts.suggestion}💡`,
   ]
-}
-
-const jsonArrayLength = (value: unknown): number => (Array.isArray(value) ? value.length : 0)
-
-const renderFixBatchState = (batch: FixBatchRecord | null | undefined): string[] => {
-  if (!batch) {
-    return []
-  }
-
-  const findingCount =
-    jsonArrayLength(batch.acceptedFindingIds) + jsonArrayLength(batch.pendingFindingIds)
-  const rows = [
-    `| Status | ${fixBatchStatusLabel(batch)} |`,
-    `| Loop | ${batch.loopCount} |`,
-    findingCount > 0 ? `| Findings | ${findingCount} |` : null,
-    batch.pushedCommitSha ? `| Pushed commit | ${shortSha(batch.pushedCommitSha)} |` : null,
-    batch.failureMessage ? `| Failure | ${batch.failureMessage} |` : null,
-  ].filter((row): row is string => row !== null)
-
-  return ['', '### Fix Batch', '', '| Field | Value |', '| --- | --- |', ...rows]
 }
 
 const renderTechnicalDetails = (input: StatusNoteInput): string[] => {
@@ -434,8 +366,6 @@ export const renderStatusNoteBody = (params: {
   reviewRuns: ReviewRunRecord[]
   reviewConfig?: StatusNoteReviewConfig
   findingSeverityCounts?: FindingSeverityCounts
-  findingStateCounts?: Partial<Record<ReviewFindingState, number>>
-  fixBatch?: FixBatchRecord | null
   updatedAt?: string
 }): string => {
   const { input, reviewRuns } = params
@@ -469,16 +399,6 @@ export const renderStatusNoteBody = (params: {
     lines.push(...findingSeverityCounts)
   }
 
-  const findingDecisionCounts = renderFindingDecisionCounts(params.findingStateCounts)
-  if (findingDecisionCounts.length > 0) {
-    lines.push(...findingDecisionCounts)
-  }
-
-  const fixBatchState = renderFixBatchState(params.fixBatch)
-  if (fixBatchState.length > 0) {
-    lines.push(...fixBatchState)
-  }
-
   const technicalDetails = renderTechnicalDetails(input)
   if (technicalDetails.length > 0) {
     lines.push('', ...technicalDetails)
@@ -488,21 +408,16 @@ export const renderStatusNoteBody = (params: {
 }
 
 export const buildStatusNoteBody = async (input: StatusNoteInput): Promise<string> => {
-  const [reviewRuns, findingStateCounts, findingSeverityCounts, fixBatch] = await Promise.all([
+  const [reviewRuns, findingSeverityCounts] = await Promise.all([
     listReviewRuns({
       projectKey: input.event.projectKey,
       mrIid: input.event.mrIid,
       limit: STATUS_HISTORY_RUN_LIMIT + 1,
     }),
-    countReviewFindingsByStateForMr({
-      projectKey: input.event.projectKey,
-      mrIid: input.event.mrIid,
-    }),
     countReviewFindingSeveritiesForMr({
       projectKey: input.event.projectKey,
       mrIid: input.event.mrIid,
     }),
-    getFixBatchRecord(input.event.projectKey, input.event.mrIid),
   ])
 
   let reviewConfig: StatusNoteReviewConfig | undefined
@@ -555,7 +470,5 @@ export const buildStatusNoteBody = async (input: StatusNoteInput): Promise<strin
     reviewRuns,
     reviewConfig,
     findingSeverityCounts,
-    findingStateCounts,
-    fixBatch,
   })
 }

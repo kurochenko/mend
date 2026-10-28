@@ -125,6 +125,9 @@ const summarizeMissingFiles = (files: string[]): string => {
   return `${samples.join(', ')}${suffix}`
 }
 
+const reportsInspectedFiles = (result: ReviewAgentResult): boolean =>
+  result.inspectedFiles !== undefined || result.sessionFile !== undefined
+
 export const enforceFileInspection = async (
   input: EnforceFileInspectionInput,
 ): Promise<EnforceFileInspectionResult> => {
@@ -141,6 +144,20 @@ export const enforceFileInspection = async (
     templateWarnings.push(
       `inspection excluded generated or lock files (${excludedChangedFiles.length}/${changedFiles.length}): ${samples.join(', ')}${suffix}`,
     )
+  }
+
+  if (!reportsInspectedFiles(reviewResult)) {
+    templateWarnings.push(
+      `inspection enforcement skipped: ${reviewResult.harness} harness does not report inspected files`,
+    )
+    return {
+      reviewResult,
+      inspectedFiles: [],
+      inspectedChangedFiles: [],
+      inspectedChangedFileCount: 0,
+      inspectedChangedFileCoverage: 0,
+      templateWarnings,
+    }
   }
 
   const changedFileSet = new Set(requiredChangedFiles)

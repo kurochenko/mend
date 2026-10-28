@@ -1,16 +1,34 @@
-import { createHmac } from 'node:crypto'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { Mastra } from '@mastra/core'
-import type { AppConfig, GitHubProjectConfig } from '@/config'
-import { constantTimeEquals } from '@/lib/constant-time'
-import { enqueueMrReview } from '@/server/mr-review-queue'
-import { processReviewNoteEvent } from '@/server/review-note-events'
-import type { ReviewNoteEventPayload, ReviewWebhookEvent } from '@/server/webhook-events'
+import type { AppConfig, GitHubProjectConfig, ProjectConfig } from '@/config'
+import { findTriggerIgnoreReason } from '@/server/review-trigger'
+import { verifyGithubSignature } from '@/server/webhook-auth'
+import { dispatchReviewWebhookEvent } from '@/server/webhook-dispatch'
+import type { ReviewNote, ReviewWebhookEvent } from '@/server/webhook-events'
+import { recordWebhookPayload } from '@/server/webhook-recording'
+
+const REVIEWABLE_PULL_REQUEST_ACTIONS = new Set([
+  'opened',
+  'synchronize',
+  'reopened',
+  'ready_for_review',
+])
 
 const githubUserSchema = z.object({ id: z.number(), login: z.string() }).passthrough()
 const githubLabelSchema = z.object({ name: z.string() }).passthrough()
 const githubRepositorySchema = z.object({ id: z.number(), full_name: z.string() }).passthrough()
+
+const commentSchema = z
+  .object({
+    id: z.number(),
+    body: z.string(),
+    user: githubUserSchema,
+    html_url: z.string().optional(),
+    created_at: z.string().optional(),
+    updated_at: z.string().optional(),
+  })
+  .passthrough()
 
 const pullRequestSchema = z
   .object({
@@ -40,16 +58,7 @@ const issueCommentPayloadSchema = z
     action: z.string(),
     repository: githubRepositorySchema,
     issue: z.object({ number: z.number(), pull_request: z.unknown().optional() }).passthrough(),
-    comment: z
-      .object({
-        id: z.number(),
-        body: z.string(),
-        user: githubUserSchema,
-        html_url: z.string().optional(),
-        created_at: z.string().optional(),
-        updated_at: z.string().optional(),
-      })
-      .passthrough(),
+    comment: commentSchema,
   })
   .passthrough()
 
@@ -58,34 +67,12 @@ const reviewCommentPayloadSchema = z
     action: z.string(),
     repository: githubRepositorySchema,
     pull_request: z.object({ number: z.number() }).passthrough(),
-    comment: z
-      .object({
-        id: z.number(),
-        body: z.string(),
-        user: githubUserSchema,
-        html_url: z.string().optional(),
-        created_at: z.string().optional(),
-        updated_at: z.string().optional(),
-      })
-      .passthrough(),
+    comment: commentSchema,
   })
   .passthrough()
 
-export const verifyGithubSignature = (
-  secret: string,
-  rawBody: string,
-  signature: string | undefined,
-): boolean => {
-  if (!signature?.startsWith('sha256=')) {
-    return false
-  }
-
-  const expected = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`
-  return constantTimeEquals(signature, expected)
-}
-
 const findProject = (
-  projects: Map<string, AppConfig['projects'] extends Map<string, infer T> ? T : never>,
+  projects: Map<string, ProjectConfig>,
   fullName: string,
 ): GitHubProjectConfig | null => {
   for (const project of projects.values()) {
@@ -106,20 +93,17 @@ export const classifyGithubPullRequest = (
     return { type: 'ignored', reason: pr.merged ? 'pull request merged' : 'pull request closed' }
   }
 
-  if (!['opened', 'synchronize', 'reopened', 'ready_for_review'].includes(payload.action)) {
-    return { type: 'ignored', reason: `action "${payload.action}"` }
-  }
-
   if (pr.state !== 'open') {
     return { type: 'ignored', reason: `pull request state is "${pr.state}"` }
   }
 
-  const trigger = project.trigger
-  if (trigger.mode === 'ready' && pr.draft) {
-    return { type: 'ignored', reason: `action "${payload.action}", draft=${pr.draft}` }
-  }
-  if (trigger.mode === 'label') {
-    return { type: 'ignored', reason: 'label trigger not yet implemented' }
+  const triggerIgnoreReason = findTriggerIgnoreReason(project.trigger, {
+    action: payload.action,
+    reviewableAction: REVIEWABLE_PULL_REQUEST_ACTIONS.has(payload.action),
+    draft: pr.draft,
+  })
+  if (triggerIgnoreReason) {
+    return { type: 'ignored', reason: triggerIgnoreReason }
   }
 
   return {
@@ -133,101 +117,102 @@ export const classifyGithubPullRequest = (
     sourceBranch: pr.head.ref,
     targetBranch: pr.base.ref,
     url: pr.html_url,
+    headSha: pr.head.sha,
   }
 }
 
-const notePayload = (params: {
+const noteReceivedEvent = (params: {
+  project: GitHubProjectConfig
   repositoryId: number
   prNumber: number
-  noteId: number
-  body: string
-  user: { id: number; login: string }
-  url?: string
-  createdAt?: string
-  updatedAt?: string
-  inline: boolean
-}): ReviewNoteEventPayload => ({
-  project: { id: params.repositoryId },
-  user: { id: params.user.id, username: params.user.login },
-  merge_request: { iid: params.prNumber },
-  object_attributes: {
-    id: params.noteId,
-    note: params.body,
-    noteable_type: 'MergeRequest',
-    discussion_id: null,
-    type: params.inline ? 'DiffNote' : null,
-    action: 'create',
-    url: params.url,
-    created_at: params.createdAt,
-    updated_at: params.updatedAt,
-    system: false,
-  },
-})
+  comment: z.infer<typeof commentSchema>
+  isDiffNote: boolean
+}): ReviewWebhookEvent => {
+  const { comment } = params
+  const note: ReviewNote = {
+    mrIid: params.prNumber,
+    noteId: comment.id,
+    body: comment.body,
+    author: { id: comment.user.id, username: comment.user.login },
+    isDiffNote: params.isDiffNote,
+    url: comment.html_url,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+  }
+  return {
+    type: 'mr_note_received',
+    projectKey: params.project.key,
+    projectId: params.repositoryId,
+    note,
+  }
+}
 
 export const classifyGithubIssueComment = (
   project: GitHubProjectConfig,
   payload: z.infer<typeof issueCommentPayloadSchema>,
-): { event: ReviewWebhookEvent; payload: ReviewNoteEventPayload | null } => {
+): ReviewWebhookEvent => {
   if (payload.action !== 'created') {
-    return { event: { type: 'ignored', reason: `action "${payload.action}"` }, payload: null }
+    return { type: 'ignored', reason: `action "${payload.action}"` }
   }
   if (!payload.issue.pull_request) {
-    return { event: { type: 'ignored', reason: 'comment not on a pull request' }, payload: null }
+    return { type: 'ignored', reason: 'comment not on a pull request' }
   }
 
-  const normalized = notePayload({
+  return noteReceivedEvent({
+    project,
     repositoryId: payload.repository.id,
     prNumber: payload.issue.number,
-    noteId: payload.comment.id,
-    body: payload.comment.body,
-    user: payload.comment.user,
-    url: payload.comment.html_url,
-    createdAt: payload.comment.created_at,
-    updatedAt: payload.comment.updated_at,
-    inline: false,
+    comment: payload.comment,
+    isDiffNote: false,
   })
-
-  return {
-    event: {
-      type: 'mr_note_received',
-      projectKey: project.key,
-      projectId: payload.repository.id,
-      mrIid: payload.issue.number,
-      noteId: payload.comment.id,
-    },
-    payload: normalized,
-  }
 }
 
 export const classifyGithubReviewComment = (
   project: GitHubProjectConfig,
   payload: z.infer<typeof reviewCommentPayloadSchema>,
-): { event: ReviewWebhookEvent; payload: ReviewNoteEventPayload | null } => {
+): ReviewWebhookEvent => {
   if (payload.action !== 'created') {
-    return { event: { type: 'ignored', reason: `action "${payload.action}"` }, payload: null }
+    return { type: 'ignored', reason: `action "${payload.action}"` }
   }
 
-  const normalized = notePayload({
+  return noteReceivedEvent({
+    project,
     repositoryId: payload.repository.id,
     prNumber: payload.pull_request.number,
-    noteId: payload.comment.id,
-    body: payload.comment.body,
-    user: payload.comment.user,
-    url: payload.comment.html_url,
-    createdAt: payload.comment.created_at,
-    updatedAt: payload.comment.updated_at,
-    inline: true,
+    comment: payload.comment,
+    isDiffNote: true,
   })
+}
 
-  return {
-    event: {
-      type: 'mr_note_received',
-      projectKey: project.key,
-      projectId: payload.repository.id,
-      mrIid: payload.pull_request.number,
-      noteId: payload.comment.id,
-    },
-    payload: normalized,
+const parseAndClassify = <T>(
+  schema: z.ZodType<T>,
+  raw: unknown,
+  classify: (payload: T) => ReviewWebhookEvent,
+): { event: ReviewWebhookEvent } | { issues: z.core.$ZodIssue[] } => {
+  const parsed = schema.safeParse(raw)
+  return parsed.success ? { event: classify(parsed.data) } : { issues: parsed.error.issues }
+}
+
+const classifyGithubEvent = (
+  project: GitHubProjectConfig,
+  eventName: string | undefined,
+  raw: unknown,
+): { event: ReviewWebhookEvent } | { issues: z.core.$ZodIssue[] } | null => {
+  switch (eventName) {
+    case 'pull_request':
+      return parseAndClassify(pullRequestPayloadSchema, raw, (payload) =>
+        classifyGithubPullRequest(project, payload),
+      )
+    case 'issue_comment':
+      return parseAndClassify(issueCommentPayloadSchema, raw, (payload) =>
+        classifyGithubIssueComment(project, payload),
+      )
+    case 'pull_request_review_comment':
+      return parseAndClassify(reviewCommentPayloadSchema, raw, (payload) =>
+        classifyGithubReviewComment(project, payload),
+      )
+    default:
+      return null
   }
 }
 
@@ -252,9 +237,13 @@ export const createGithubWebhookRoute = (config: AppConfig, mastra: Mastra) => {
     if (!project) {
       return c.json({ error: 'unknown project' }, 404)
     }
-    if (
-      !verifyGithubSignature(project.webhook_secret, rawBody, c.req.header('X-Hub-Signature-256'))
-    ) {
+    const authFailure = verifyGithubSignature(
+      project.webhook_secret,
+      rawBody,
+      c.req.header('X-Hub-Signature-256'),
+    )
+    if (authFailure) {
+      console.warn(`[webhook] rejected GitHub webhook for ${project.key}: ${authFailure}`)
       return c.json({ error: 'unauthorized' }, 401)
     }
 
@@ -262,59 +251,20 @@ export const createGithubWebhookRoute = (config: AppConfig, mastra: Mastra) => {
       return c.json({ ok: true }, 200)
     }
 
-    let event: ReviewWebhookEvent = { type: 'ignored', reason: `event "${eventName}"` }
-    let normalizedNotePayload: ReviewNoteEventPayload | null = null
-
-    if (eventName === 'pull_request') {
-      const parseResult = pullRequestPayloadSchema.safeParse(raw)
-      if (!parseResult.success) {
-        return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
-      }
-      event = classifyGithubPullRequest(project, parseResult.data)
-    } else if (eventName === 'issue_comment') {
-      const parseResult = issueCommentPayloadSchema.safeParse(raw)
-      if (!parseResult.success) {
-        return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
-      }
-      const result = classifyGithubIssueComment(project, parseResult.data)
-      event = result.event
-      normalizedNotePayload = result.payload
-    } else if (eventName === 'pull_request_review_comment') {
-      const parseResult = reviewCommentPayloadSchema.safeParse(raw)
-      if (!parseResult.success) {
-        return c.json({ error: 'invalid payload', details: parseResult.error.issues }, 400)
-      }
-      const result = classifyGithubReviewComment(project, parseResult.data)
-      event = result.event
-      normalizedNotePayload = result.payload
+    const result = classifyGithubEvent(project, eventName, raw)
+    if (!result) {
+      return c.json({ type: 'ignored', reason: `event "${eventName}"` }, 200)
+    }
+    if ('issues' in result) {
+      return c.json({ error: 'invalid payload', details: result.issues }, 400)
     }
 
-    if (event.type === 'mr_review_requested') {
-      console.log(`[webhook] review requested: ${event.url} (${event.projectKey})`)
-      enqueueMrReview({
-        mastra,
-        project,
-        payload: raw,
-        event,
-      }).catch((err: unknown) =>
-        console.error(`[webhook] queue failure for ${event.projectKey} MR !${event.mrIid}:`, err),
-      )
-    } else if (event.type === 'mr_note_received' && normalizedNotePayload) {
-      console.log(
-        `[webhook] note received for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}`,
-      )
-      processReviewNoteEvent({
-        project,
-        mastra,
-        payload: normalizedNotePayload,
-      }).catch((err: unknown) =>
-        console.error(
-          `[webhook] note processing failure for ${event.projectKey} MR !${event.mrIid} note ${event.noteId}:`,
-          err,
-        ),
-      )
+    if (config.env.RECORD_WEBHOOKS && eventName) {
+      recordWebhookPayload({ projectKey: project.key, eventKind: eventName, payload: raw })
     }
 
+    const { event } = result
+    dispatchReviewWebhookEvent({ mastra, project, event, rawPayload: raw })
     return c.json(event, 200)
   })
 

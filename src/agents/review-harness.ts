@@ -1,6 +1,6 @@
 export type ReviewAgentHarnessId = 'pi' | 'codex' | 'opencode' | 'ensemble'
 
-export type ReviewAgentToolMode = 'full' | 'none'
+export type ReviewAgentToolMode = 'read-only' | 'none'
 
 export type ReviewAgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high'
 

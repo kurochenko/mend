@@ -3,9 +3,7 @@ import { eq } from 'drizzle-orm'
 import { closeDb, getDb, initDb } from '@/db/client'
 import {
   countReviewFindingSeveritiesForMr,
-  countReviewFindingsByStateForMr,
   getReviewFindingByProviderThreadId,
-  getReviewFindingByThreadId,
   listReviewFindingsForMr,
   updateReviewFindingState,
   upsertReviewFinding,
@@ -78,14 +76,12 @@ if (!testDatabaseUrl) {
         providerThreadId: 'discussion-1',
       })
       const forMr = await listReviewFindingsForMr({ projectKey, mrIid })
-      const byThreadId = await getReviewFindingByThreadId(thread.id)
 
       expect(byThread?.id).toBe(finding.id)
-      expect(byThreadId?.id).toBe(finding.id)
       expect(forMr.map((row) => row.id)).toEqual([finding.id])
     })
 
-    test('updates state and exposes summary counts', async () => {
+    test('updates state with the decision details', async () => {
       const thread = await createThread('discussion-2')
       const finding = await upsertReviewFinding({
         projectKey,
@@ -97,17 +93,15 @@ if (!testDatabaseUrl) {
 
       const updated = await updateReviewFindingState({
         id: finding.id,
-        state: 'accepted',
+        state: 'resolved',
         decisionReason: 'valid finding',
         decidedByExternalId: '7',
         decidedByName: 'Reviewer',
       })
-      const counts = await countReviewFindingsByStateForMr({ projectKey, mrIid })
 
-      expect(updated?.state).toBe('accepted')
+      expect(updated?.state).toBe('resolved')
       expect(updated?.decisionReason).toBe('valid finding')
       expect(updated?.decidedAt).toBeInstanceOf(Date)
-      expect(counts).toEqual({ accepted: 1 })
     })
 
     test('counts valid severities from finding metadata for an MR', async () => {

@@ -19,6 +19,17 @@ export interface OpenCodeReviewResult {
 
 const DEFAULT_TIMEOUT_MS = 300_000
 
+export const buildReviewEnv = (env: NodeJS.ProcessEnv): Record<string, string | undefined> => ({
+  ...env,
+  OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+  OPENCODE_PERMISSION: JSON.stringify({
+    edit: 'deny',
+    bash: 'deny',
+    webfetch: 'deny',
+    external_directory: 'deny',
+  }),
+})
+
 const buildFullPrompt = (instructions: string, prompt: string): string =>
   `<instructions>\n${instructions}\n</instructions>\n\n${prompt}`
 
@@ -121,6 +132,7 @@ export const invokeOpenCodeReview = async (
   try {
     const proc = Bun.spawn(command, {
       cwd: config.cwd,
+      env: buildReviewEnv(process.env),
       stdout: 'pipe',
       stderr: 'pipe',
     })

@@ -3,12 +3,11 @@ import { getProject } from '@/config'
 import { countPostedSuccessfulReviewRuns } from '@/db/review-runs'
 import { createReviewProvider } from '@/integrations/provider/client'
 import { assertSafeGitRef, execGit } from '@/lib/exec'
-import { parseDiff } from '@/lib/diff'
 import {
   buildPreviousReviewContext,
   loadPublishedReviewThreadsForMr,
 } from '@/mastra/review/previous-context'
-import { executePostPlan } from '@/mastra/review/publish-executor'
+import { executePostPlan, resolveReviewedDiffContext } from '@/mastra/review/publish-executor'
 import {
   buildPostPlan,
   emptyPostedThreadRef,
@@ -32,23 +31,30 @@ export const postStep = createStep({
     const provider = createReviewProvider(project)
 
     console.log(`[post] fetching diff refs for ${inputData.projectKey} MR !${inputData.mrIid}`)
-    const [diffRefs, mrChangedFiles, reviewRunCount, existingPublishedThreads] = await Promise.all([
-      provider.fetchDiffRefs(inputData.mrIid),
-      provider.fetchChangedFiles(inputData.mrIid),
-      countPostedSuccessfulReviewRuns({
-        projectKey: inputData.projectKey,
-        mrIid: inputData.mrIid,
-      }),
-      loadPublishedReviewThreadsForMr({
-        project,
-        projectKey: inputData.projectKey,
-        mrIid: inputData.mrIid,
-      }),
-    ])
+    const [{ diffRefs, diffMap }, mrChangedFiles, reviewRunCount, existingPublishedThreads] =
+      await Promise.all([
+        resolveReviewedDiffContext({
+          provider,
+          mrIid: inputData.mrIid,
+          commitSha: inputData.commitSha,
+          readDiff: async (baseSha) =>
+            await execGit(
+              ['diff', `${assertSafeGitRef(baseSha, 'MR diff base ref')}...HEAD`],
+              inputData.worktreePath,
+            ),
+        }),
+        provider.fetchChangedFiles(inputData.mrIid),
+        countPostedSuccessfulReviewRuns({
+          projectKey: inputData.projectKey,
+          mrIid: inputData.mrIid,
+        }),
+        loadPublishedReviewThreadsForMr({
+          project,
+          projectKey: inputData.projectKey,
+          mrIid: inputData.mrIid,
+        }),
+      ])
 
-    const mrDiffBase = assertSafeGitRef(diffRefs.baseSha, 'MR diff base ref')
-    const diffOutput = await execGit(['diff', `${mrDiffBase}...HEAD`], inputData.worktreePath)
-    const diffMap = parseDiff(diffOutput)
     const previousRunId = inputData.previousRunId
     const shouldResolveThreads =
       inputData.reviewMode === 'update' &&
@@ -123,17 +129,11 @@ export const postStep = createStep({
       reviewMode: inputData.reviewMode,
       previousReviewedSha: inputData.previousReviewedSha,
       previousRunId: inputData.previousRunId,
-      reviewIntent: inputData.reviewIntent,
-      reviewIntentConfidence: inputData.reviewIntentConfidence,
-      reviewIntentRationale: inputData.reviewIntentRationale,
-      reviewTemplateId: inputData.reviewTemplateId,
-      reviewTemplateSource: inputData.reviewTemplateSource,
       assessment: inputData.assessment,
       summary: inputData.summary,
       findings: plan.findings,
       inlineComments: plan.inlineComments,
       resolutionVerdicts: inputData.resolutionVerdicts,
-      meta: inputData.meta,
       featureFlags: inputData.featureFlags,
       reviewDiagnostics: inputData.reviewDiagnostics,
       comparisonResult: inputData.comparisonResult,
@@ -151,7 +151,6 @@ export const postStep = createStep({
         partiallyFixedThreadCount: execution.resolutionStats.partiallyFixedThreadCount,
         unmatchedVerdictCount: execution.resolutionStats.unmatchedVerdictCount,
         persistedFindingCount: execution.persistedFindingCount,
-        automaticFixBatchStatus: null,
       },
       posted: plan.inlineDrafts.length,
       skipped: plan.skippedInlineComments.length,

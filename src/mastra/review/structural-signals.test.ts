@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
@@ -207,6 +207,63 @@ describe('collectStructuralSignals', () => {
     })
     expect(renderStructuralSignals(signals)).toContain(
       'Introduced dependency cycle: src/a.ts -> src/b.ts -> src/a.ts',
+    )
+  })
+
+  const collectForRepoConfig = async (configFile: string, configContent: string) => {
+    tmp = mkdtempSync(join(tmpdir(), 'mend-structural-signals-config-'))
+    const repo = join(tmp, 'repo')
+    mkdirSync(join(repo, 'src'), { recursive: true })
+    git(tmp, ['init', '--initial-branch=main', repo])
+    writeFileSync(join(repo, 'package.json'), '{"type":"module"}\n')
+    writeFileSync(join(repo, 'src/a.ts'), 'export const a = 1\n')
+    git(repo, ['add', '.'])
+    gitCommit(repo, 'base')
+    const baseSha = git(repo, ['rev-parse', 'HEAD'])
+    writeFileSync(join(repo, configFile), configContent)
+    git(repo, ['add', '.'])
+    gitCommit(repo, 'add config')
+
+    const signals = await collectStructuralSignals({
+      worktreePath: repo,
+      diffBaseRef: baseSha,
+      changedFiles: [configFile],
+      fileStats: [{ file: configFile, added: 1, deleted: 0 }],
+      budget: { cruiseTimeoutMs: 10_000, maxModules: 50 },
+    })
+    return { repo, signals }
+  }
+
+  it('never executes a JavaScript dependency-cruiser config from the reviewed repo', async () => {
+    const marker = join(tmpdir(), `mend-depcruise-marker-${process.pid}-${Date.now()}`)
+    const { signals } = await collectForRepoConfig(
+      '.dependency-cruiser.cjs',
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')\nmodule.exports = {}\n`,
+    )
+
+    expect(existsSync(marker)).toBe(false)
+    expect(signals.dependencyCruiser.configSource).toBe('fallback')
+  })
+
+  it('uses a JSON dependency-cruiser config from the reviewed repo', async () => {
+    const { signals } = await collectForRepoConfig(
+      '.dependency-cruiser.json',
+      JSON.stringify({ forbidden: [{ name: 'no-circular', from: {}, to: { circular: true } }] }),
+    )
+
+    expect(signals.dependencyCruiser.configSource).toBe('repo')
+    expect(signals.dependencyCruiser.configPath).toBe('.dependency-cruiser.json')
+  })
+
+  it('rejects a JSON dependency-cruiser config that extends another module', async () => {
+    const { signals } = await collectForRepoConfig(
+      '.dependency-cruiser.json',
+      JSON.stringify({ extends: './evil.cjs' }),
+    )
+
+    expect(signals.dependencyCruiser.skippedReason).toBe('config load failed')
+    expect(signals.diagnostics.map((diagnostic) => diagnostic.message).join('\n')).toContain(
+      '"extends" is not supported',
     )
   })
 

@@ -15,13 +15,21 @@ import {
   replyToThread,
   resolveThread,
 } from '@/integrations/github/threads'
-import { publishReviewBatch } from '@/integrations/github/publish'
+import {
+  createSummaryNoteWithReconciliation,
+  publishReviewBatch,
+} from '@/integrations/github/publish'
+import type { PublishSummaryNoteParams } from '@/integrations/provider/types'
 
 export const createGitHubReviewProvider = (project: GitHubProjectConfig) => ({
   kind: 'github' as const,
   fetchCurrentUser: async () => await fetchCurrentUser(project),
   fetchChangeRequest: async (changeNumber: number) => await fetchPr(project, changeNumber),
   fetchDiffRefs: async (changeNumber: number) => await fetchDiffRefs(project, changeNumber),
+  fetchDiffRefsForCommit: async (changeNumber: number, commitSha: string) => ({
+    ...(await fetchDiffRefs(project, changeNumber)),
+    headSha: commitSha,
+  }),
   fetchChangedFiles: async (changeNumber: number) => await fetchChangedFiles(project, changeNumber),
   listNotes: async (changeNumber: number) => await listPrIssueComments(project, changeNumber),
   createNote: async (changeNumber: number, body: string) =>
@@ -49,5 +57,12 @@ export const createGitHubReviewProvider = (project: GitHubProjectConfig) => ({
     await publishReviewBatch(project, {
       ...params,
       currentUser: await fetchCurrentUser(project),
+    }),
+  publishSummaryNote: async (params: PublishSummaryNoteParams) =>
+    await createSummaryNoteWithReconciliation({
+      project,
+      changeNumber: params.changeNumber,
+      body: params.body,
+      matchSummaryNote: params.matchSummaryNote,
     }),
 })

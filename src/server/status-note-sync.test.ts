@@ -50,6 +50,7 @@ const makeProvider = (notes: ProviderNote[] = []): ReviewProvider => {
       throw new Error('unused')
     }),
     fetchDiffRefs: mock(async () => ({ baseSha: 'base', headSha: 'head', startSha: 'start' })),
+    fetchDiffRefsForCommit: mock(async () => null),
     fetchChangedFiles: mock(async () => []),
     listNotes: mock(() => Promise.resolve(notes)),
     createNote: mock((_mrIid: number, body: string) =>
@@ -85,9 +86,8 @@ const makeProvider = (notes: ProviderNote[] = []): ReviewProvider => {
       preExistingDraftCount: 0,
       recoveredDraftCount: 0,
       draftRecoveryAction: 'none' as const,
-      summaryNoteId: 1,
-      summaryReconciled: false,
     })),
+    publishSummaryNote: mock(async () => ({ id: 1, reconciled: false })),
   }
 }
 

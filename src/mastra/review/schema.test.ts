@@ -9,12 +9,6 @@ const validPayload = {
   version: 'v2',
   assessment: 'needs_discussion',
   summary: 'Review summary',
-  meta: {
-    templateId: 'style_refactor',
-    intent: 'style_refactor',
-    confidence: 0.92,
-    selectionSource: 'classifier',
-  },
   findings: [
     {
       id: 'dup-layout',
@@ -62,14 +56,6 @@ describe('reviewOutputV2Schema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('validates when model output omits meta', () => {
-    const withoutMeta: Partial<typeof validPayload> = { ...validPayload }
-    delete withoutMeta.meta
-    const parsed = reviewOutputV2Schema.parse(withoutMeta)
-
-    expect(parsed.meta).toBeUndefined()
-  })
-
   it('rejects findings without evidence', () => {
     const result = reviewOutputV2Schema.safeParse({
       ...validPayload,
@@ -84,7 +70,7 @@ describe('parseReviewOutputV2', () => {
   it('parses JSON object embedded in fenced block', () => {
     const raw = `\n\`\`\`json\n${JSON.stringify(validPayload, null, 2)}\n\`\`\``
     const parsed = parseReviewOutputV2(raw)
-    expect(parsed.meta?.templateId).toBe('style_refactor')
+    expect(parsed.summary).toBe(validPayload.summary)
   })
 
   it('throws a clear error when final JSON is missing', () => {

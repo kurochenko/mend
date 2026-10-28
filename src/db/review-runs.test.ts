@@ -18,22 +18,24 @@ const deleteTestRows = async () => {
   await getDb().delete(reviewRuns).where(eq(reviewRuns.projectKey, projectKey))
 }
 
-const createSuccessfulRun = async (source: ReviewRunSource, createdAt = new Date()) => {
+const createSuccessfulRun = async (
+  source: ReviewRunSource,
+  createdAt = new Date(),
+  result: Record<string, unknown> = { summaryNoteId: 1 },
+) => {
   const id = crypto.randomUUID()
-  await getDb()
-    .insert(reviewRuns)
-    .values({
-      id,
-      projectKey,
-      mrIid,
-      commitSha: sha,
-      model: 'test-model',
-      source,
-      status: 'success',
-      input: {},
-      result: { summaryNoteId: 1 },
-      createdAt,
-    })
+  await getDb().insert(reviewRuns).values({
+    id,
+    projectKey,
+    mrIid,
+    commitSha: sha,
+    model: 'test-model',
+    source,
+    status: 'success',
+    input: {},
+    result,
+    createdAt,
+  })
   return id
 }
 
@@ -60,6 +62,29 @@ describe.skipIf(testDatabaseUrl === '')('successful review run history', () => {
     expect(await getLatestSuccessfulReviewRun({ projectKey, mrIid })).toBeNull()
     expect(await hasSuccessfulReviewRunForSha({ projectKey, mrIid, sha })).toBe(false)
     expect(await countPostedSuccessfulReviewRuns({ projectKey, mrIid })).toBe(0)
+  })
+
+  test('skips newer dry-run runs when picking the previous reviewed run', async () => {
+    const id = await createSuccessfulRun('webhook', new Date('2026-01-01T00:00:00Z'), {
+      summaryNoteId: 1,
+      featureFlags: { dryRun: false },
+    })
+    await createSuccessfulRun('webhook', new Date('2026-01-02T00:00:00Z'), {
+      summaryNoteId: 0,
+      featureFlags: { dryRun: true },
+    })
+
+    expect((await getLatestSuccessfulReviewRun({ projectKey, mrIid }))?.id).toBe(id)
+  })
+
+  test('does not treat a dry-run SHA as already reviewed', async () => {
+    await createSuccessfulRun('webhook', new Date(), {
+      summaryNoteId: 0,
+      featureFlags: { dryRun: true },
+    })
+
+    expect(await getLatestSuccessfulReviewRun({ projectKey, mrIid })).toBeNull()
+    expect(await hasSuccessfulReviewRunForSha({ projectKey, mrIid, sha })).toBe(false)
   })
 
   for (const source of ['webhook', 'replay_iid', 'replay_run'] satisfies ReviewRunSource[]) {

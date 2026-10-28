@@ -14,41 +14,43 @@ Git hosting is pluggable behind the `ReviewProvider` port (`src/integrations/pro
 
 - Mastra owns the workflow: webhook routing, worktree lifecycle, run logging, workflow state.
 - The configured review harness (`pi`, `codex`, or `opencode`) owns the review: reads code, inspects changed files where supported, and produces structured findings.
-- LLM-based intent classification (via Pi with tools disabled) determines review template selection.
-- Reviews run in **initial** or **update** mode. Update mode resolves the diff base by trying candidates in order: previous reviewed SHA → `start_sha` → `base_sha` → target branch, with fetch-and-retry fallback.
-- File inspection is enforced with retry from harness session diagnostics where available. If any files are missed after the first pass, a retry prompt lists the missing files explicitly; remaining gaps are recorded as warnings.
-- Reviews are posted atomically per provider: GitLab draft notes bulk-published after all notes are created; GitHub inline comments in a single review submission. The post step refuses to publish if pre-existing drafts (GitLab draft notes / GitHub pending review comments) are found (safety check against publishing someone else's drafts).
+- Every review uses one system prompt (`src/mastra/review/prompt-templates.ts`); there is no intent classifier or per-intent template. Project-specific rules come from the reviewed repository's own `AGENTS.md`, which the reviewer is told to read.
+- Reviews run in **initial** or **update** mode. Update mode resolves the diff base by trying candidates in order: previous reviewed SHA → `start_sha` → `base_sha` → target branch (`refs/remotes/origin/<target>` first), fetching missing `start_sha`/`base_sha` commits first and retrying after an authenticated refetch. The bare clone tracks `+refs/heads/*:refs/remotes/origin/*`.
+- File inspection is enforced with retry from harness session diagnostics where available. If any files are missed after the first pass, a retry prompt lists the missing files explicitly; remaining gaps are recorded as warnings. Harnesses that cannot report inspected files (OpenCode) skip enforcement with a warning.
+- Reviews are posted atomically per provider: GitLab draft notes bulk-published after all notes are created; GitHub inline comments in a single review submission. Before publishing, GitLab drafts that the bot authored with Mend markers (left by an interrupted earlier run) are deleted; any other pre-existing draft (other author or no Mend marker) blocks publishing. Inline positions use the reviewed commit's diff refs, falling back to general discussions when GitLab has no MR version for that commit. The summary note is the last provider write of a review (after inline comments, finding discussions, persistence, and thread resolutions), created without retries and reconciled by run marker, so a failed post leaves no summary to duplicate on retry.
 - A DB-backed queue (`mr_review_queue`) with in-process workers deduplicates concurrent reviews per MR (latest-wins: a push with a new SHA aborts the running review's harness processes so the newest commit is reviewed next; the post step is never interrupted) with SHA-level dedup (skips if the exact SHA was already reviewed successfully). Updates a persistent MR status note (`queued`/`running`/`completed`/`failed`/`no_change`).
 - On startup, orphaned `running` review runs are marked as `failed`.
-- Dry run mode (`review.flags.dry_run`) skips all provider posting; logs draft note bodies to stdout.
-- An evals dashboard at `/evals` renders review run history with filtering by project.
+- Dry run mode (`review.flags.dry_run`) skips all provider posting (including the status note and note-event replies); logs draft note bodies to stdout. Dry-run runs do not count for SHA dedup or as the previous reviewed run.
+- `service-control drain` persists across restarts; Mend's own shutdown stops claiming work in memory only. Run `service-control resume` to leave a drain. Operator drains record `drained_by = 'operator'`; on startup Mend clears any `draining` row without an owner (left by older versions' shutdowns).
+- An evals dashboard at `/evals` renders review run history with filtering by project. `/evals` and `/improvements` require `DASHBOARD_TOKEN` (HTTP Basic password or Bearer) and return 404 when it is unset (`src/server/dashboard-auth.ts`). Mastra's HTTP API is not mounted.
+- Reviewed code and commenters are untrusted. Pi runs with `projectTrusted: false`, no repo extensions/skills/prompts, and read-only tools confined to the worktree (`src/agents/pi-read-only-tools.ts`). OpenCode runs with project config disabled and edit/bash/webfetch denied. Codex runs with a `mend-review` permission profile: filesystem denied except minimal system paths and read access to the worktree, its bare clone (git common dir, so `git` works in the worktree), and the Codex install, no network (`src/agents/codex-harness.ts`). Repo dependency-cruiser config is read from `.dependency-cruiser.json` only.
 
-Only MR review is implemented. Bug fix workflow, Slack integration, label-triggered reviews, and suspend/resume for reply watching are not built yet. MR note webhooks are processed for triage commands, thread replies, and memory.
+Mend is a reviewer only: it never edits or pushes code and never executes the reviewed repository's code. Slack integration, label-triggered reviews, and suspend/resume for reply watching are not built yet. MR note webhooks are processed for thread replies and memory.
 
 ## Key Directories
 
 - `src/index.ts` — entry point: boots Mastra, Hono server, webhook routes
 - `src/config.ts` — loads and validates `mend.yml` project config (Zod schemas)
 - `src/server/` — GitLab and GitHub webhook handlers (`gitlab-webhook.ts`, `github-webhook.ts`, neutral event types in `webhook-events.ts`), MR review queue, evals dashboard
+- `src/server/webhook-auth.ts`, `webhook-dispatch.ts`, `review-trigger.ts`, `webhook-recording.ts` — shared webhook signature checks, neutral event dispatch (review enqueue / note processing), trigger-mode policy, and fixture recording used by both provider routes
 - `src/server/status-note-body.ts` — persistent MR status note rendering
 - `src/server/status-note-sync.ts` — persistent MR status note sync (non-throwing provider note upsert)
 - `src/server/review-context.ts` — previous run lookup and SHA-level dedup helpers for update reviews
 - `src/mastra/` — Mastra instance, workflow definition, steps (setup, review, post)
 - `src/mastra/workflows/` — workflow definitions (currently `mr-review.ts`)
 - `src/mastra/run-mr-review.ts` — workflow execution wrapper with run persistence and failure handling
-- `src/mastra/review/` — intent classifier, template selection, prompt construction, output schema, context package, diff base resolution, publish plan/executor, formatting, inspection enforcement, diagnostics, eval scoring
+- `src/mastra/review/` — prompt construction, output schema, context package, diff base resolution, publish plan/executor, formatting, inspection enforcement, diagnostics, eval scoring
 - `src/mastra/steps/` — the three workflow steps (setup, review, post)
 - `src/agents/` — coding-agent harness adapters and shared harness contract (`pi`, `codex`, `opencode`)
 - `src/integrations/provider/` — provider-neutral `ReviewProvider` port, neutral types, and the GitLab/GitHub adapter factories
 - `src/integrations/gitlab/` — GitLab REST API functions (MR details, draft notes, note/discussion CRUD)
 - `src/integrations/github/` — GitHub REST + GraphQL functions (PR details, issue comments, review threads, pending-review publish, reactions)
 - `src/integrations/repo.ts` — bare clone management, worktree creation/cleanup
+- `src/integrations/repo-remote.ts` — authenticated fetches, clone fetch refspec, ensuring commits exist locally
 - `src/integrations/context7.ts` — Context7 documentation lookup (registered as Pi tool)
 - `src/db/` — Drizzle schema (`review_runs` table), DB client, run CRUD
 - `src/cli/` — replay and runs CLI tools
 - `src/lib/` — shared utilities (diff parser for inline comment positioning, shell exec with git ref sanitization, JSON extraction)
-- `agents/AGENTS.md` — base review instructions loaded by Pi
-- `skills/{project}/AGENTS.md` — per-project review instructions
 - `tools/context7-fetch.ts` — CLI wrapper for manual Context7 lookups
 - `sessions/` — Pi session files (gitignored, runtime)
 - `workspaces/` — bare clones and per-MR worktrees (gitignored, runtime)
@@ -57,7 +59,7 @@ Only MR review is implemented. Bug fix workflow, Slack integration, label-trigge
 
 ## Config
 
-Project configuration lives in `mend.yml` (gitignored). See `mend.example.yml` for the template. Secrets live in `.env`. The config supports multiple projects, each with: git host connection (`platform: gitlab` with `project_id`, or `platform: github` with `repo: owner/name`), trigger mode (`ready`/`all`; `label` is schema-valid but currently not executed), review LLM model and thinking level, intent classifier settings, and feature flags.
+Project configuration lives in `mend.yml` (gitignored). See `mend.example.yml` for the template. Secrets live in `.env`. The config supports multiple projects, each with: git host connection (`platform: gitlab` with `project_id`, or `platform: github` with `repo: owner/name`), trigger mode (`ready`/`all`; `label` is schema-valid but currently not executed), review LLM model and thinking level, and feature flags. Removed settings (`review.fix`, `review.triage`, `review.intent`, `review.template`, `flags.prompt_templates_v2`, `flags.schema_v2`) are ignored with a startup warning.
 
 ## Commands
 
@@ -81,7 +83,7 @@ bun run db:migrate     # Run migrations
 bun run db:studio      # Open Drizzle Studio
 ```
 
-Benchmark fixtures: record webhook payloads under `fixtures/webhooks/` and run them through `bun run replay --benchmark <config.json>`. Put expectation files under `fixtures/expectations/<case-name>.json`, or set `expectationPath` in the benchmark case. Expectations should list known `expectedFindings`, `forbiddenFindings`, and optional `expectedResolutionVerdicts`; use `--json` for machine-readable benchmark output.
+Benchmarks: `bun run replay --benchmark <config.json>` re-reviews live MRs (cases name project, MR number, optional commit) in initial mode. Put expectation files under `fixtures/expectations/<case-name>.json`, or set `expectationPath` in the benchmark case. Expectations list known `expectedFindings`, `forbiddenFindings`, and count/category checks; `expectedResolutionVerdicts` is rejected because benchmark runs have no previous review. All expectations are validated before any review runs; `--json` writes only the report to stdout; the process exits 1 if any case fails.
 
 ## Deployment
 

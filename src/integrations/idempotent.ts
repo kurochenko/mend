@@ -15,26 +15,27 @@ export const createWithReconciliation = async <T, Listed>(params: {
   create: () => Promise<T>
   list: () => Promise<Listed[]>
   match: (items: Listed[]) => T | Promise<T | undefined> | undefined
+  attempts?: number
+  retryDelayMs?: number
 }): Promise<{ value: T; reconciled: boolean }> => {
-  try {
-    return { value: await params.create(), reconciled: false }
-  } catch (error) {
+  const attempts = params.attempts ?? 1
+  for (let attempt = 1; ; attempt++) {
     try {
-      const listed = await params.list()
-      const existing = await params.match(listed)
+      return { value: await params.create(), reconciled: false }
+    } catch (error) {
+      let existing: T | undefined
+      try {
+        existing = await params.match(await params.list())
+      } catch (reconciliationError) {
+        rethrowWithReconciliationContext(params.action, error, reconciliationError)
+      }
       if (existing !== undefined) {
         return { value: existing, reconciled: true }
       }
-
-      throw error
-    } catch (reconciliationError) {
-      if (reconciliationError === error) {
+      if (attempt >= attempts) {
         throw error
       }
-
-      rethrowWithReconciliationContext(params.action, error, reconciliationError)
+      await Bun.sleep((params.retryDelayMs ?? 1_000) * attempt)
     }
   }
-
-  throw new Error('unreachable')
 }

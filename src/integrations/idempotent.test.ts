@@ -56,4 +56,43 @@ describe('createWithReconciliation', () => {
       }),
     ).rejects.toThrow('create thing failed: create failed')
   })
+
+  it('retries create only after reconciliation confirms nothing was created', async () => {
+    let creates = 0
+    const result = await createWithReconciliation({
+      action: 'Summary',
+      create: async () => {
+        creates += 1
+        if (creates === 1) {
+          throw new Error('429 rate limited')
+        }
+        return 'created'
+      },
+      list: async () => [],
+      match: () => undefined,
+      attempts: 3,
+      retryDelayMs: 0,
+    })
+
+    expect(result).toEqual({ value: 'created', reconciled: false })
+    expect(creates).toBe(2)
+  })
+
+  it('stops after the configured attempts when create keeps failing', async () => {
+    let creates = 0
+    await expect(
+      createWithReconciliation({
+        action: 'Summary',
+        create: async () => {
+          creates += 1
+          throw new Error(`failure ${creates}`)
+        },
+        list: async () => [],
+        match: () => undefined,
+        attempts: 3,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toThrow('failure 3')
+    expect(creates).toBe(3)
+  })
 })

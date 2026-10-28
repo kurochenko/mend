@@ -13,7 +13,12 @@ import {
   addDiscussionNoteReaction,
   addMergeRequestNoteReaction,
 } from '@/integrations/gitlab/reactions'
-import { fetchMr, fetchMrChangedFiles, fetchMrDiffRefs } from '@/integrations/gitlab/mr'
+import {
+  fetchMr,
+  fetchMrChangedFiles,
+  fetchMrDiffRefs,
+  fetchMrVersionDiffRefs,
+} from '@/integrations/gitlab/mr'
 import {
   bulkPublishDrafts,
   createDraftNote,
@@ -32,6 +37,7 @@ import type {
   DiffRefs,
   DraftClassification,
   PublishBatchResult,
+  PublishSummaryNoteParams,
   PublishInlineDraft,
   ProviderNote,
   ProviderThread,
@@ -44,10 +50,8 @@ interface GitLabPublishReviewBatchParams {
   projectKey: string
   reviewRunId: string
   inlineDrafts: PublishInlineDraft[]
-  summaryBody: string
   diffRefs: DiffRefs
   classifyDraft: (body: string) => DraftClassification
-  matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
 }
 
 const readPositionString = (position: unknown, key: 'new_path' | 'old_path'): string | null => {
@@ -122,16 +126,10 @@ const mapDiffRefs = (diffRefs: {
 const findDraftByBody = (drafts: MrDraftNote[], body: string): MrDraftNote | undefined =>
   drafts.find((draft) => draft.body === body)
 
-const findPublishedSummaryForRun = (
-  notes: ProviderNote[],
-  matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined,
-): ProviderNote | undefined => matchSummaryNote(notes)
-
 const classifyAndCleanPreExistingDrafts = async (params: {
   project: GitLabProjectConfig
   projectKey: string
   changeNumber: number
-  reviewRunId: string
   classifyDraft: (body: string) => DraftClassification
 }): Promise<{
   preExistingDraftCount: number
@@ -149,30 +147,39 @@ const classifyAndCleanPreExistingDrafts = async (params: {
     }
   }
 
-  const currentRunDrafts = preExistingDrafts.filter(
-    (draft) => params.classifyDraft(draft.body) === 'current_run',
+  const currentUser = await fetchCurrentUser(params.project)
+  const ownDraftClassifications = preExistingDrafts.map((draft) =>
+    draft.authorId === currentUser.id ? params.classifyDraft(draft.body) : 'foreign',
   )
+  const currentRunDraftCount = ownDraftClassifications.filter(
+    (classification) => classification === 'current_run',
+  ).length
+  const otherRunMendDraftCount = ownDraftClassifications.filter(
+    (classification) => classification === 'mend_other_run',
+  ).length
+  const foreignDraftCount = preExistingDraftCount - currentRunDraftCount - otherRunMendDraftCount
 
-  if (currentRunDrafts.length === preExistingDraftCount) {
-    for (const draft of currentRunDrafts) {
-      await deleteDraftNote(params.project, params.changeNumber, draft.id)
-    }
-
-    return {
-      preExistingDraftCount,
-      recoveredDraftCount: currentRunDrafts.length,
-      draftRecoveryAction: 'cleaned',
-    }
+  if (foreignDraftCount > 0) {
+    throw new Error(
+      `Refusing to bulk publish drafts for ${params.projectKey} MR !${params.changeNumber}: found ${preExistingDraftCount} pre-existing draft notes (${currentRunDraftCount} current-run, ${otherRunMendDraftCount} other-run, ${foreignDraftCount} foreign)`,
+    )
   }
 
-  const otherRunMendDraftCount = preExistingDrafts.filter(
-    (draft) => params.classifyDraft(draft.body) === 'mend_other_run',
-  ).length
-  const foreignDraftCount = preExistingDraftCount - currentRunDrafts.length - otherRunMendDraftCount
+  if (otherRunMendDraftCount > 0) {
+    console.warn(
+      `[post] deleting ${otherRunMendDraftCount} leftover Mend draft notes from earlier runs on ${params.projectKey} MR !${params.changeNumber}`,
+    )
+  }
 
-  throw new Error(
-    `Refusing to bulk publish drafts for ${params.projectKey} MR !${params.changeNumber}: found ${preExistingDraftCount} pre-existing draft notes (${currentRunDrafts.length} current-run, ${otherRunMendDraftCount} other-run, ${foreignDraftCount} foreign)`,
-  )
+  for (const draft of preExistingDrafts) {
+    await deleteDraftNote(params.project, params.changeNumber, draft.id)
+  }
+
+  return {
+    preExistingDraftCount,
+    recoveredDraftCount: preExistingDraftCount,
+    draftRecoveryAction: 'cleaned',
+  }
 }
 
 const buildDraftNotePosition = (params: {
@@ -256,17 +263,25 @@ const bulkPublishDraftsWithReconciliation = async (params: {
   return { reconciled: result.reconciled }
 }
 
+const SUMMARY_NOTE_CREATE_ATTEMPTS = 3
 const createSummaryNoteWithReconciliation = async (params: {
   project: GitLabProjectConfig
   changeNumber: number
   body: string
   matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
 }): Promise<{ id: number; reconciled: boolean }> => {
+  const existing = params.matchSummaryNote(await listMrNotes(params.project, params.changeNumber))
+  if (existing) {
+    return { id: existing.id, reconciled: true }
+  }
+
   const result = await createWithReconciliation({
     action: 'Summary note creation',
-    create: async () => await createMrNote(params.project, params.changeNumber, params.body),
+    attempts: SUMMARY_NOTE_CREATE_ATTEMPTS,
+    create: async () =>
+      await createMrNote(params.project, params.changeNumber, params.body, { maxRetries: 0 }),
     list: async () => await listMrNotes(params.project, params.changeNumber),
-    match: (notes) => findPublishedSummaryForRun(notes, params.matchSummaryNote),
+    match: (notes) => params.matchSummaryNote(notes),
   })
 
   return { id: result.value.id, reconciled: result.reconciled }
@@ -280,7 +295,6 @@ const publishReviewBatch = async (
     project,
     projectKey: params.projectKey,
     changeNumber: params.changeNumber,
-    reviewRunId: params.reviewRunId,
     classifyDraft: params.classifyDraft,
   })
 
@@ -314,22 +328,7 @@ const publishReviewBatch = async (
     }
   }
 
-  console.log('[post] creating summary note')
-  const summaryNote = await createSummaryNoteWithReconciliation({
-    project,
-    changeNumber: params.changeNumber,
-    body: params.summaryBody,
-    matchSummaryNote: params.matchSummaryNote,
-  })
-  if (summaryNote.reconciled) {
-    console.warn('[post] re-used existing summary note after ambiguous create failure')
-  }
-
-  return {
-    ...draftRecovery,
-    summaryNoteId: summaryNote.id,
-    summaryReconciled: summaryNote.reconciled,
-  }
+  return draftRecovery
 }
 
 export const createGitLabReviewProvider = (project: GitLabProjectConfig) => ({
@@ -339,6 +338,10 @@ export const createGitLabReviewProvider = (project: GitLabProjectConfig) => ({
   fetchDiffRefs: async (changeNumber: number) => {
     const { diffRefs } = await fetchMrDiffRefs(project, changeNumber)
     return mapDiffRefs(diffRefs)
+  },
+  fetchDiffRefsForCommit: async (changeNumber: number, commitSha: string) => {
+    const diffRefs = await fetchMrVersionDiffRefs(project, changeNumber, commitSha)
+    return diffRefs ? mapDiffRefs(diffRefs) : null
   },
   fetchChangedFiles: async (changeNumber: number) => {
     const { files } = await fetchMrChangedFiles(project, changeNumber)
@@ -374,4 +377,11 @@ export const createGitLabReviewProvider = (project: GitLabProjectConfig) => ({
     }),
   publishReviewBatch: async (params: GitLabPublishReviewBatchParams) =>
     await publishReviewBatch(project, params),
+  publishSummaryNote: async (params: PublishSummaryNoteParams) =>
+    await createSummaryNoteWithReconciliation({
+      project,
+      changeNumber: params.changeNumber,
+      body: params.body,
+      matchSummaryNote: params.matchSummaryNote,
+    }),
 })

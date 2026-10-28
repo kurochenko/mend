@@ -1,22 +1,20 @@
 import { Hono } from 'hono'
-import { cors } from 'hono/cors'
-import { MastraServer } from '@mastra/hono'
 import { loadConfig } from '@/config'
 import { closeDb, initDb } from '@/db/client'
 import { recoverOrphanedRuns } from '@/db/review-runs'
-import { getServiceRuntimeMode, setServiceRuntimeMode } from '@/db/service-runtime'
+import { clearLeftoverShutdownDrain, getServiceRuntimeMode } from '@/db/service-runtime'
 import { createMastra } from '@/mastra/index'
 import { getLatestDigestAt } from '@/db/improvement-proposals'
 import { runImprovementDigest } from '@/mastra/improvements/miner'
 import { createEvalsDashboardRoute } from '@/server/evals-dashboard'
-import { recoverInterruptedFixBatches, resumeRunnableFixBatches } from '@/server/fix-batch-runner'
 import { createGithubWebhookRoute } from '@/server/github-webhook'
 import { createImprovementsDashboardRoute } from '@/server/improvements-dashboard'
+import { createDashboardAuth } from '@/server/dashboard-auth'
 import { createGitlabWebhookRoute } from '@/server/gitlab-webhook'
 import {
-  enqueueMrReview,
   recoverPersistedReviewQueue,
   resumePersistedReviewQueue,
+  stopClaimingReviewJobs,
 } from '@/server/mr-review-queue'
 import { createShutdownHandler } from '@/server/shutdown'
 
@@ -43,7 +41,6 @@ const startQueueReconciler = (
       }
 
       await resumePersistedReviewQueue(config, mastra)
-      await resumeRunnableFixBatches(config, mastra, { enqueueMrReview })
     } catch (error) {
       console.error('[queue] reconcile failed:', error)
     } finally {
@@ -132,30 +129,25 @@ const main = async () => {
     )
   }
 
-  const recoveredFixBatchCount = await recoverInterruptedFixBatches()
-  if (recoveredFixBatchCount > 0) {
-    console.log(
-      `[startup] re-queued ${recoveredFixBatchCount} interrupted fix batch entr${recoveredFixBatchCount === 1 ? 'y' : 'ies'}`,
+  if (await clearLeftoverShutdownDrain()) {
+    console.log('[startup] cleared a drain left by a previous shutdown')
+  }
+  if ((await getServiceRuntimeMode()) === 'draining') {
+    console.warn(
+      '[startup] service mode is draining; queued reviews stay paused until `bun run service-control resume`',
     )
   }
 
-  const initialMode = await getServiceRuntimeMode()
-  if (initialMode === 'draining') {
-    await setServiceRuntimeMode('running')
-    console.log('[startup] service mode reset from draining to running')
-  }
-
   const app = new Hono()
-  app.use('*', cors())
 
   app.get('/health', (c) => c.json({ status: 'ok' }))
+  const dashboardAuth = createDashboardAuth(config.env.DASHBOARD_TOKEN)
+  app.use('/evals/*', dashboardAuth)
+  app.use('/improvements/*', dashboardAuth)
   app.route('/evals', createEvalsDashboardRoute(config))
   app.route('/improvements', createImprovementsDashboardRoute())
   app.route('/webhooks/gitlab', createGitlabWebhookRoute(config, mastra))
   app.route('/webhooks/github', createGithubWebhookRoute(config, mastra))
-
-  const server = new MastraServer({ app, mastra })
-  await server.init()
 
   console.log(`Mend starting on port ${config.env.PORT}`)
   console.log(`Projects loaded: ${[...config.projects.keys()].join(', ')}`)
@@ -174,13 +166,6 @@ const main = async () => {
     )
   }
 
-  const resumedFixBatchCount = await resumeRunnableFixBatches(config, mastra, { enqueueMrReview })
-  if (resumedFixBatchCount > 0) {
-    console.log(
-      `[startup] resumed ${resumedFixBatchCount} fix batch entr${resumedFixBatchCount === 1 ? 'y' : 'ies'}`,
-    )
-  }
-
   const queueReconcilerTimer = startQueueReconciler(config, mastra)
   const improvementsScheduler = startImprovementsScheduler(config)
   if (improvementsScheduler) {
@@ -189,7 +174,7 @@ const main = async () => {
     )
   }
   const shutdownHandler = createShutdownHandler({
-    setServiceRuntimeMode,
+    stopClaimingReviewJobs,
     stopServer: async () => {
       await bunServer.stop(false)
     },

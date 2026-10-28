@@ -3,7 +3,6 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { cruise } from 'dependency-cruiser'
-import extractDepcruiseOptions from 'dependency-cruiser/config-utl/extract-depcruise-options'
 import type {
   ICruiseOptions,
   ICruiseResult,
@@ -25,10 +24,13 @@ const RULE_VIOLATION_LIMIT = 10
 const CYCLE_LIMIT = 8
 const BROKEN_DOC_REFERENCE_LIMIT = 12
 const QUALITY_GATE_WEAKENING_LIMIT = 12
-const CRUISE_CONFIG_FILES = [
-  '.dependency-cruiser.cjs',
-  '.dependency-cruiser.js',
-  '.dependency-cruiser.json',
+const CRUISE_CONFIG_FILE = '.dependency-cruiser.json'
+const CRUISE_CODE_LOADING_OPTIONS = [
+  'webpackConfig',
+  'babelConfig',
+  'tsConfig',
+  'cache',
+  'enhancedResolveOptions',
 ]
 const QUALITY_GATE_FILE_PATTERNS = [
   /^\.gitlab-ci\.yml$/,
@@ -443,16 +445,6 @@ const looksLikeJsTsProject = (worktreePath: string): boolean =>
   existsSync(resolve(worktreePath, 'package.json')) ||
   existsSync(resolve(worktreePath, 'tsconfig.json'))
 
-const findCruiseConfigPath = (worktreePath: string): string | null => {
-  for (const file of CRUISE_CONFIG_FILES) {
-    const candidate = resolve(worktreePath, file)
-    if (existsSync(candidate)) {
-      return candidate
-    }
-  }
-  return null
-}
-
 interface NamedCruiseRule {
   name?: string
   comment?: string
@@ -472,10 +464,33 @@ const buildRuleCommentMap = (rules: NamedCruiseRule[]): Map<string, string> => {
   return comments
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const readRepoCruiseOptions = async (configPath: string): Promise<ICruiseOptions> => {
+  const parsed: unknown = JSON.parse(await readFile(configPath, 'utf8'))
+  if (!isRecord(parsed)) {
+    throw new Error(`${CRUISE_CONFIG_FILE} must contain a JSON object`)
+  }
+  if (parsed.extends !== undefined) {
+    throw new Error(`${CRUISE_CONFIG_FILE} "extends" is not supported`)
+  }
+  const { options, ...ruleSet } = parsed
+  const repoOptions = isRecord(options) ? { ...options } : {}
+  for (const key of CRUISE_CODE_LOADING_OPTIONS) {
+    delete repoOptions[key]
+  }
+  return {
+    ...repoOptions,
+    ruleSet,
+    validate: Object.keys(ruleSet).length > 0,
+  }
+}
+
 const loadCruiseConfig = async (worktreePath: string): Promise<CruiseConfig> => {
-  const configPath = findCruiseConfigPath(worktreePath)
-  if (configPath) {
-    const options = await extractDepcruiseOptions(configPath)
+  const configPath = resolve(worktreePath, CRUISE_CONFIG_FILE)
+  if (existsSync(configPath)) {
+    const options = await readRepoCruiseOptions(configPath)
     return {
       options: {
         ...options,
@@ -484,7 +499,7 @@ const loadCruiseConfig = async (worktreePath: string): Promise<CruiseConfig> => 
         outputTo: undefined,
       },
       source: 'repo',
-      path: normalizeModulePath(relative(worktreePath, configPath)),
+      path: CRUISE_CONFIG_FILE,
       ruleComments: buildRuleCommentMap([
         ...(options.ruleSet?.forbidden ?? []),
         ...(options.ruleSet?.required ?? []),

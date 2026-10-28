@@ -11,22 +11,19 @@ import type {
   ReviewAgentThinkingLevel,
 } from '@/agents/review-harness'
 import { createReviewProvider } from '@/integrations/provider/client'
+import { ensureCommitsAvailable, refetchOrigin } from '@/integrations/repo-remote'
 import { toErrorMessage } from '@/lib/errors'
 import { applyBlockingReviewPolicy } from '@/mastra/review/blocking-policy'
 import { buildReviewContextPackage } from '@/mastra/review/context-package'
 import { resolveDiffBaseRef } from '@/mastra/review/diff-base'
 import { enforceFileInspection } from '@/mastra/review/inspection'
-import { classifyMrIntentWithLlm, type LlmIntentResult } from '@/mastra/review/intent-llm'
 import {
   parseReviewOutputV2,
   ReviewOutputParseError,
   type ReviewOutputV2,
 } from '@/mastra/review/schema'
-import type { TemplateSelectionResult } from '@/mastra/review/template-selection'
 
 export interface ReviewFeatureFlags {
-  promptTemplatesV2: boolean
-  schemaV2: boolean
   structuredFindingsPost: boolean
   dryRun: boolean
   structuralSignals: boolean
@@ -46,8 +43,6 @@ export interface ReviewStepContextInput {
 }
 
 export const getReviewFeatureFlags = (project: ProjectConfig): ReviewFeatureFlags => ({
-  promptTemplatesV2: project.review.flags.prompt_templates_v2,
-  schemaV2: project.review.flags.schema_v2,
   structuredFindingsPost: project.review.flags.structured_findings_post,
   dryRun: project.review.flags.dry_run,
   structuralSignals: project.review.flags.structural_signals,
@@ -63,13 +58,22 @@ export const resolveReviewContext = async (
 ) => {
   const provider = createReviewProvider(project)
   const diffRefs = await provider.fetchDiffRefs(input.mrIid)
-  const diffBaseResolution = await resolveDiffBaseRef({
+  const commitFetchWarnings = await ensureCommitsAvailable(project, [
+    diffRefs.baseSha,
+    ...(diffRefs.startSha ? [diffRefs.startSha] : []),
+  ])
+  const resolvedDiffBase = await resolveDiffBaseRef({
     worktreePath: input.worktreePath,
     reviewMode: input.reviewMode,
     previousReviewedSha: input.previousReviewedSha,
     targetBranch: input.targetBranch,
     diffRefs,
+    refetchOrigin: async () => await refetchOrigin(project),
   })
+  const diffBaseResolution = {
+    ...resolvedDiffBase,
+    warnings: [...commitFetchWarnings, ...resolvedDiffBase.warnings],
+  }
 
   const contextPackage = await buildReviewContextPackage({
     worktreePath: input.worktreePath,
@@ -80,79 +84,6 @@ export const resolveReviewContext = async (
   return {
     contextPackage,
     diffBaseResolution,
-  }
-}
-
-export const classifyIntentWithFallback = async (
-  project: ProjectConfig,
-  input: Pick<
-    ReviewStepContextInput,
-    'title' | 'description' | 'labels' | 'sourceBranch' | 'targetBranch' | 'worktreePath'
-  >,
-  changedFiles: string[],
-  sessionDir: string,
-): Promise<{
-  intentResult: LlmIntentResult
-  intentClassifierFailure: string | null
-  intentClassifierDurationMs: number
-}> => {
-  const intentStart = Date.now()
-  let intentClassifierFailure: string | null = null
-  let intentResult: LlmIntentResult
-
-  try {
-    intentResult = await classifyMrIntentWithLlm(
-      {
-        title: input.title,
-        description: input.description,
-        labels: input.labels,
-        sourceBranch: input.sourceBranch,
-        targetBranch: input.targetBranch,
-        changedFiles,
-      },
-      {
-        cwd: input.worktreePath,
-        sessionDir: resolve(sessionDir, 'intent'),
-        harness: project.review.intent.harness,
-        model: project.review.intent.model,
-        thinkingLevel: project.review.intent.thinking_level,
-        timeoutMs: project.review.intent.timeout_ms,
-      },
-    )
-  } catch (error) {
-    const message = toErrorMessage(error)
-    if (project.review.intent.failure_policy === 'fail') {
-      throw error
-    }
-    intentClassifierFailure = message
-    intentResult = {
-      intent: 'mixed',
-      confidence: 0,
-      rationale: ['intent classifier failed, using mixed template fallback', message],
-      secondaryIntents: [],
-    }
-    console.warn(`[review] intent classifier failed, fallback=mixed reason=${message}`)
-  }
-
-  return {
-    intentResult,
-    intentClassifierFailure,
-    intentClassifierDurationMs: Date.now() - intentStart,
-  }
-}
-
-export const selectEffectiveTemplate = (
-  featureFlags: ReviewFeatureFlags,
-  templateResult: TemplateSelectionResult,
-): TemplateSelectionResult => {
-  if (featureFlags.promptTemplatesV2) {
-    return templateResult
-  }
-
-  return {
-    templateId: 'mixed',
-    source: 'fallback',
-    warnings: [...templateResult.warnings, 'prompt templates v2 disabled by project config'],
   }
 }
 
@@ -274,7 +205,7 @@ type ReviewAgentHarnesses = Record<ReviewAgentHarnessId, ReviewAgentHarness>
 
 type RunReviewAgent = (
   prompt: string,
-  options?: { toolMode?: 'full' | 'none' },
+  options?: { toolMode?: 'read-only' | 'none' },
 ) => Promise<ReviewAgentResult>
 
 const buildFinalOutputRetryPrompt = (prompt: string, error: ReviewOutputParseError): string =>

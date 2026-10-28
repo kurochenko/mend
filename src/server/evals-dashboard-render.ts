@@ -337,10 +337,6 @@ const renderRunRow = (run: ReviewRunRecord): string => {
   const previousReviewedSha =
     getString(result, 'previousReviewedSha') || getString(input, 'previousReviewedSha')
 
-  const intent = getString(result, 'reviewIntent')
-  const template = getString(result, 'reviewTemplateId')
-  const templateSource = getString(result, 'reviewTemplateSource')
-  const confidence = getNumber(result, 'reviewIntentConfidence')
   const assessment = getString(result, 'assessment')
   const summary = getString(result, 'summary')
   const labels = getStringArray(input, 'labels')
@@ -372,9 +368,6 @@ const renderRunRow = (run: ReviewRunRecord): string => {
   return `
     <tr>
       <td>
-        <div><strong>intent:</strong> <code>${escapeHtml(intent || '-')}</code></div>
-        <div><strong>template:</strong> <code>${escapeHtml(template || '-')}</code> <span class="muted">(${escapeHtml(templateSource || '-')})</span></div>
-        <div><strong>confidence:</strong> ${confidence === null ? '-' : confidence.toFixed(2)}</div>
         <div><strong>diff base:</strong> <code>${escapeHtml(diffBaseRef || '-')}</code></div>
         <div><strong>changed files:</strong> ${changedFileCount ?? '-'}</div>
         ${warningsHtml}

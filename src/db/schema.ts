@@ -1,6 +1,5 @@
 import {
   bigint,
-  boolean,
   index,
   integer,
   jsonb,
@@ -26,9 +25,6 @@ export const reviewFindingStateValues = [
 ] as const
 export const reviewFindingStateEnum = pgEnum('review_finding_state', reviewFindingStateValues)
 export type ReviewFindingState = (typeof reviewFindingStateValues)[number]
-export const fixBatchStatusValues = ['pending', 'running', 'completed', 'failed'] as const
-export const fixBatchStatusEnum = pgEnum('fix_batch_status', fixBatchStatusValues)
-export type FixBatchStatus = (typeof fixBatchStatusValues)[number]
 export const improvementProposalTypeValues = ['tooling', 'instructions', 'process'] as const
 export const improvementProposalTypeEnum = pgEnum(
   'improvement_proposal_type',
@@ -69,6 +65,7 @@ export const reviewRuns = pgTable('review_runs', {
 export const serviceRuntime = pgTable('service_runtime', {
   id: text('id').primaryKey(),
   mode: serviceRuntimeModeEnum('mode').notNull(),
+  drainedBy: text('drained_by'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
@@ -102,34 +99,6 @@ export const mrStatusNotes = pgTable(
   },
   (table) => ({
     mrIdx: uniqueIndex('mr_status_notes_mr_idx').on(table.projectKey, table.mrIid),
-  }),
-)
-
-export const mrFixBatches = pgTable(
-  'mr_fix_batches',
-  {
-    id: text('id').primaryKey(),
-    projectKey: text('project_key').notNull(),
-    mrIid: integer('mr_iid').notNull(),
-    status: fixBatchStatusEnum('status').notNull(),
-    force: boolean('force').notNull(),
-    loopCount: integer('loop_count').default(0).notNull(),
-    requestNoteId: text('request_note_id'),
-    requestThreadId: text('request_thread_id'),
-    requestedByExternalId: text('requested_by_external_id'),
-    requestedByName: text('requested_by_name'),
-    acceptedFindingIds: jsonb('accepted_finding_ids').notNull(),
-    pendingFindingIds: jsonb('pending_finding_ids').notNull(),
-    sourceBranch: text('source_branch'),
-    pushedCommitSha: text('pushed_commit_sha'),
-    result: jsonb('result'),
-    failureMessage: text('failure_message'),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => ({
-    mrIdx: uniqueIndex('mr_fix_batches_mr_idx').on(table.projectKey, table.mrIid),
-    statusIdx: index('mr_fix_batches_status_idx').on(table.status),
   }),
 )
 

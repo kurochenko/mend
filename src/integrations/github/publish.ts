@@ -19,10 +19,8 @@ interface GitHubPublishReviewBatchParams {
   projectKey: string
   reviewRunId: string
   inlineDrafts: PublishInlineDraft[]
-  summaryBody: string
   diffRefs: DiffRefs
   classifyDraft: (body: string) => DraftClassification
-  matchSummaryNote: (notes: ProviderNote[]) => ProviderNote | undefined
   currentUser: ProviderUser
 }
 
@@ -211,7 +209,8 @@ const publishInlineReview = async (params: {
   return { reconciled: result.reconciled }
 }
 
-const createSummaryNoteWithReconciliation = async (params: {
+const SUMMARY_NOTE_CREATE_ATTEMPTS = 3
+export const createSummaryNoteWithReconciliation = async (params: {
   project: GitHubProjectConfig
   changeNumber: number
   body: string
@@ -226,6 +225,7 @@ const createSummaryNoteWithReconciliation = async (params: {
 
   const result = await createWithReconciliation({
     action: 'Summary note creation',
+    attempts: SUMMARY_NOTE_CREATE_ATTEMPTS,
     create: async () =>
       await createPrIssueComment(params.project, params.changeNumber, params.body),
     list: async () => await listPrIssueComments(params.project, params.changeNumber),
@@ -264,20 +264,5 @@ export const publishReviewBatch = async (
     }
   }
 
-  console.log('[post] creating summary note')
-  const summaryNote = await createSummaryNoteWithReconciliation({
-    project,
-    changeNumber: params.changeNumber,
-    body: params.summaryBody,
-    matchSummaryNote: params.matchSummaryNote,
-  })
-  if (summaryNote.reconciled) {
-    console.warn('[post] re-used existing summary note after reconciliation')
-  }
-
-  return {
-    ...draftRecovery,
-    summaryNoteId: summaryNote.id,
-    summaryReconciled: summaryNote.reconciled,
-  }
+  return draftRecovery
 }

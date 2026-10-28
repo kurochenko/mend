@@ -164,4 +164,31 @@ describe('enforceFileInspection', () => {
       rmSync(cwd, { recursive: true, force: true })
     }
   })
+
+  it('skips enforcement without retry when the harness reports no inspection data', async () => {
+    let retryCalled = false
+
+    const result = await enforceFileInspection({
+      reviewResult: {
+        harness: 'opencode',
+        model: 'test-model',
+        success: true,
+        output: '{}',
+        durationMs: 1,
+      },
+      worktreePath: '/tmp/unused',
+      changedFiles: ['src/feature/handler.ts'],
+      prompt: 'review',
+      retryReview: async () => {
+        retryCalled = true
+        throw new Error('retry must not run')
+      },
+    })
+
+    expect(retryCalled).toBe(false)
+    expect(result.inspectedChangedFileCount).toBe(0)
+    expect(result.templateWarnings).toContain(
+      'inspection enforcement skipped: opencode harness does not report inspected files',
+    )
+  })
 })
