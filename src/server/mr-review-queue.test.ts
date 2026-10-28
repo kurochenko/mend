@@ -436,6 +436,111 @@ describe('enqueueMrReview', () => {
     expect(mockSyncStatusNote).not.toHaveBeenCalled()
   })
 
+  describe('superseding a running review', () => {
+    const startBlockingReview = async (): Promise<{
+      signal: () => AbortSignal | undefined
+      release: () => void
+    }> => {
+      const event = makeEvent()
+      let capturedSignal: AbortSignal | undefined
+      let release = () => {}
+      mockClaimPendingReviewJob
+        .mockImplementationOnce(() =>
+          Promise.resolve({
+            id: 'test-project:42',
+            projectKey: 'test-project',
+            mrIid: 42,
+            event,
+            payload: makePayload('old-sha'),
+            commitSha: 'old-sha',
+          }),
+        )
+        .mockImplementation(() => Promise.resolve(null))
+      mockExecuteMrReview.mockImplementation(
+        (params) =>
+          new Promise((resolve) => {
+            capturedSignal = params.signal
+            const finish = () =>
+              resolve({
+                reviewRunId: 'run-1',
+                workflowRunId: 'wf-1',
+                workflowResult: {
+                  status: 'failed',
+                  error: new Error('aborted'),
+                  input: {},
+                  steps: {},
+                },
+              } as unknown as Awaited<ReturnType<typeof executeMrReviewFunction>>)
+            release = finish
+            params.signal?.addEventListener('abort', finish, { once: true })
+          }),
+      )
+
+      await enqueueReview({
+        mastra: makeMastra(),
+        project: makeProject(),
+        payload: makePayload('old-sha'),
+        event,
+      })
+
+      for (let attempt = 0; attempt < 20 && !capturedSignal; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+
+      const runningRecord = makeQueueRecord({
+        runningEvent: event,
+        runningPayload: makePayload('old-sha'),
+        runningCommitSha: 'old-sha',
+        pendingEvent: null,
+        pendingPayload: null,
+      })
+      mockGetReviewQueueRecord.mockImplementation(() => Promise.resolve(runningRecord))
+      mockUpsertPendingReviewRequest.mockImplementation(async ({ event: pending, payload }) =>
+        makeQueueRecord({ ...runningRecord, pendingEvent: pending, pendingPayload: payload }),
+      )
+
+      return { signal: () => capturedSignal, release: () => release() }
+    }
+
+    test('newer commit stops the running review without reporting a failure', async () => {
+      const running = await startBlockingReview()
+      mockSyncStatusNote.mockClear()
+
+      await enqueueReview({
+        mastra: makeMastra(),
+        project: makeProject(),
+        payload: makePayload('new-sha'),
+        event: makeEvent(),
+      })
+      await waitForWorker()
+
+      expect(running.signal()?.aborted).toBe(true)
+      expect(statusInputs().some((input) => input.state === 'failed')).toBe(false)
+      expect(
+        statusInputs().some(
+          (input) =>
+            input.state === 'running' &&
+            input.message === 'Stopping review of an older commit; newer update queued',
+        ),
+      ).toBe(true)
+    })
+
+    test('same-SHA webhook leaves the running review alone', async () => {
+      const running = await startBlockingReview()
+
+      await enqueueReview({
+        mastra: makeMastra(),
+        project: makeProject(),
+        payload: makePayload('old-sha'),
+        event: makeEvent(),
+      })
+
+      expect(running.signal()?.aborted).toBe(false)
+      running.release()
+      await waitForWorker()
+    })
+  })
+
   test('draining mode queues without starting a review', async () => {
     mockGetServiceRuntimeMode.mockImplementation(() => Promise.resolve('draining'))
 

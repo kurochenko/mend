@@ -10,6 +10,7 @@ import {
   setPendingCommitSha,
   setRunningCommitSha,
   upsertPendingReviewRequest,
+  type ReviewQueueJob,
   type ReviewQueueRecord,
 } from '@/db/review-queue'
 import { updateReviewRunResult } from '@/db/review-runs'
@@ -29,6 +30,7 @@ import { getLatestSuccessfulRun, hasSuccessfulRunForSha } from '@/server/review-
 import { syncStatusNote } from '@/server/status-note-sync'
 
 const activeWorkers = new Set<string>()
+const runningReviewAbortControllers = new Map<string, AbortController>()
 
 interface ReviewQueueDependencies {
   claimPendingReviewJob: typeof claimPendingReviewJob
@@ -147,8 +149,16 @@ const extractWebhookCommitSha = (payload: unknown): string | null => {
 const queueMessageForRecord = (
   record: ReviewQueueRecord,
   draining: boolean,
+  supersedingRunningReview: boolean,
 ): { state: 'queued' | 'running'; message: string } => {
   if (record.runningEvent) {
+    if (supersedingRunningReview) {
+      return {
+        state: 'running',
+        message: 'Stopping review of an older commit; newer update queued',
+      }
+    }
+
     return {
       state: 'running',
       message: draining
@@ -169,6 +179,7 @@ const updateQueuedStatusNote = async (params: {
   record: ReviewQueueRecord
   provider: ReviewProvider
   dependencies: ReviewQueueDependencies
+  supersedingRunningReview?: boolean
 }): Promise<void> => {
   const { record, provider, dependencies } = params
   const event = asMrReviewRequestEvent(record.runningEvent ?? record.pendingEvent)
@@ -177,7 +188,11 @@ const updateQueuedStatusNote = async (params: {
   }
 
   const draining = await isDraining(dependencies)
-  const queueState = queueMessageForRecord(record, draining)
+  const queueState = queueMessageForRecord(
+    record,
+    draining,
+    params.supersedingRunningReview ?? false,
+  )
   await dependencies.syncStatusNote({
     input: {
       state: queueState.state,
@@ -202,6 +217,17 @@ const hasRunningReviewForSha = (
       record.runningCommitSha === commitSha,
   )
 
+const isRunningReviewForOtherSha = (
+  record: ReviewQueueRecord | null,
+  commitSha: string | null,
+): boolean =>
+  Boolean(
+    record?.runningEvent &&
+      record.runningCommitSha &&
+      commitSha &&
+      record.runningCommitSha !== commitSha,
+  )
+
 const hasPendingDuplicateForSha = (
   record: ReviewQueueRecord | null,
   commitSha: string | null,
@@ -214,14 +240,21 @@ const hasPendingDuplicateForSha = (
       record.pendingCommitSha === commitSha,
   )
 
+const logSupersededReview = (job: ReviewQueueJob): void => {
+  console.log(
+    `[queue] stopped superseded review for ${job.event.projectKey} MR !${job.event.mrIid}; newer commit queued`,
+  )
+}
+
 const runQueuedJob = async (params: {
   mastra: Mastra
   project: ProjectConfig
-  job: NonNullable<Awaited<ReturnType<typeof claimPendingReviewJob>>>
+  job: ReviewQueueJob
   provider: ReviewProvider
   dependencies: ReviewQueueDependencies
+  signal: AbortSignal
 }): Promise<void> => {
-  const { mastra, job, provider, dependencies } = params
+  const { mastra, job, provider, dependencies, signal } = params
   let statusReviewMode: 'initial' | 'update' = 'initial'
   let statusPreviousReviewedSha: string | null = null
   let statusRunningSha: string | undefined
@@ -259,6 +292,11 @@ const runQueuedJob = async (params: {
     statusReviewMode = reviewMode
     statusPreviousReviewedSha = previousReviewedSha
 
+    if (signal.aborted) {
+      logSupersededReview(job)
+      return
+    }
+
     console.log(
       `[queue] starting ${reviewMode} review for ${job.event.projectKey} MR !${job.event.mrIid} SHA ${commitSha.slice(0, 8)}`,
     )
@@ -278,6 +316,7 @@ const runQueuedJob = async (params: {
       mastra,
       source: 'webhook',
       webhookPayload: job.payload,
+      signal,
       input: {
         projectKey: job.event.projectKey,
         mrIid: job.event.mrIid,
@@ -327,6 +366,11 @@ const runQueuedJob = async (params: {
       return
     }
 
+    if (signal.aborted) {
+      logSupersededReview(job)
+      return
+    }
+
     await dependencies.syncStatusNote({
       input: {
         state: 'failed',
@@ -343,6 +387,11 @@ const runQueuedJob = async (params: {
       `[webhook] review ${execution.workflowResult.status} for ${job.event.projectKey} MR !${job.event.mrIid}`,
     )
   } catch (error) {
+    if (signal.aborted) {
+      logSupersededReview(job)
+      return
+    }
+
     const message = toErrorMessage(error)
 
     if (isMissingRemoteRefFailure(message)) {
@@ -407,7 +456,20 @@ const processQueueLoop = async (
         return
       }
 
-      await runQueuedJob({ mastra, project, job, provider, dependencies })
+      const abortController = new AbortController()
+      runningReviewAbortControllers.set(key, abortController)
+      try {
+        await runQueuedJob({
+          mastra,
+          project,
+          job,
+          provider,
+          dependencies,
+          signal: abortController.signal,
+        })
+      } finally {
+        runningReviewAbortControllers.delete(key)
+      }
 
       const remaining = await withMrLock(key, async () => {
         const finished = await dependencies.finishRunningReview(project.key, job.mrIid)
@@ -524,7 +586,22 @@ export const enqueueMrReview = async (params: {
           queuedRecord
       }
 
-      await updateQueuedStatusNote({ record: queuedRecord, provider, dependencies })
+      const runningReviewAbortController = isRunningReviewForOtherSha(existing, commitSha)
+        ? runningReviewAbortControllers.get(key)
+        : undefined
+      if (runningReviewAbortController && !runningReviewAbortController.signal.aborted) {
+        console.log(
+          `[queue] newer commit ${commitSha?.slice(0, 8)} for ${event.projectKey} MR !${event.mrIid}; stopping review of ${existing?.runningCommitSha?.slice(0, 8)}`,
+        )
+        runningReviewAbortController.abort()
+      }
+
+      await updateQueuedStatusNote({
+        record: queuedRecord,
+        provider,
+        dependencies,
+        supersedingRunningReview: Boolean(runningReviewAbortController),
+      })
 
       return {
         ignored: false,

@@ -21,6 +21,7 @@ import {
   buildReviewSystemPrompt,
   DEFAULT_REVIEW_USER_PROMPT,
 } from '@/mastra/review/prompt-templates'
+import { getReviewAbortSignal } from '@/mastra/review/review-abort'
 import { collectStructuralSignals } from '@/mastra/review/structural-signals'
 import {
   classifyIntentWithFallback,
@@ -85,7 +86,7 @@ export const reviewStep = createStep({
   id: 'review',
   inputSchema: reviewStepInputSchema,
   outputSchema: reviewStepOutputSchema,
-  execute: async ({ inputData }) => {
+  execute: async ({ inputData, requestContext }) => {
     const project = getProject(inputData.projectKey)
 
     const featureFlags = {
@@ -251,6 +252,7 @@ export const reviewStep = createStep({
         context7ApiKey: inputData.context7ApiKey,
         expectedPriorBlockerIds: collectExpectedPriorBlockerIds(previousReviewContext),
         harnesses: getReviewHarnessOverridesForTesting(),
+        signal: getReviewAbortSignal(requestContext),
       })
     reviewDiagnostics = applyReviewAgentDiagnostics(reviewDiagnostics, {
       harness: reviewResult.harness,

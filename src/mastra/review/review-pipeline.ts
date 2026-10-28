@@ -267,6 +267,7 @@ interface InvokeReviewAgentParams {
   context7ApiKey: string | null
   expectedPriorBlockerIds?: readonly string[]
   harnesses?: Partial<Record<ReviewAgentHarnessId, ReviewAgentHarness>>
+  signal?: AbortSignal
 }
 
 type ReviewAgentHarnesses = Record<ReviewAgentHarnessId, ReviewAgentHarness>
@@ -408,6 +409,11 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
   }
 
   const comparisonAbortController = new AbortController()
+  const abortComparison = () => comparisonAbortController.abort()
+  params.signal?.addEventListener('abort', abortComparison, { once: true })
+  if (params.signal?.aborted) {
+    abortComparison()
+  }
   const comparisonResultPromise = createComparisonResultPromise(
     params,
     harnesses,
@@ -427,6 +433,7 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
       timeoutMs: primaryConfig.timeoutMs,
       context7ApiKey: params.context7ApiKey,
       toolMode: options?.toolMode,
+      signal: params.signal,
     })
 
   try {
@@ -465,5 +472,7 @@ export const invokeReviewAgent = async (params: InvokeReviewAgentParams) => {
     comparisonAbortController.abort()
     await comparisonResultPromise
     throw error
+  } finally {
+    params.signal?.removeEventListener('abort', abortComparison)
   }
 }
