@@ -6,6 +6,7 @@ import {
   buildCommand,
   extractInspectedChangedFilesFromEvents,
   resolveCodexInstallRoot,
+  resolveGitCommonDir,
 } from '@/agents/codex-harness'
 
 const commandEvent = (command: string): string =>
@@ -86,12 +87,12 @@ describe('buildCommand', () => {
         sessionDir: '/sessions',
       },
       '/sessions/out.txt',
-      '/opt/codex/@openai',
+      ['/opt/codex/@openai', '/workspaces/repo'],
     )
 
     expect(command).toContain('default_permissions="mend-review"')
     expect(command).toContain(
-      'permissions.mend-review.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = "read", "/opt/codex/@openai" = "read" }',
+      'permissions.mend-review.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = "read", "/opt/codex/@openai" = "read", "/workspaces/repo" = "read" }',
     )
     expect(command).not.toContain('--sandbox')
   })
@@ -127,5 +128,43 @@ describe('resolveCodexInstallRoot', () => {
 
   it('returns null when codex is not on PATH', () => {
     expect(resolveCodexInstallRoot(() => null)).toBeNull()
+  })
+})
+
+describe('resolveGitCommonDir', () => {
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync(['git', '-C', cwd, ...args], { stderr: 'pipe' })
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString())
+    }
+  }
+
+  it('grants the bare clone that a review worktree points at', () => {
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'mend-codex-git-')))
+    try {
+      const source = join(tmp, 'source')
+      mkdirSync(source)
+      git(source, 'init', '-q', '-b', 'main')
+      writeFileSync(join(source, 'a.ts'), 'export {}\n')
+      git(source, 'add', 'a.ts')
+      git(source, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init')
+      const bare = join(tmp, 'project')
+      git(tmp, 'clone', '-q', '--bare', source, bare)
+      const worktree = join(bare, 'worktrees-mr', 'mr-1')
+      git(bare, 'worktree', 'add', '-q', '--detach', worktree, 'main')
+
+      expect(resolveGitCommonDir(worktree)).toBe(bare)
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null outside a git repository', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'mend-codex-nogit-'))
+    try {
+      expect(resolveGitCommonDir(tmp)).toBeNull()
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })

@@ -116,7 +116,7 @@ The `ensemble` harness fans out cheap finder agents across review dimensions, ad
 
 Mend treats the reviewed code and every MR commenter as untrusted:
 
-- Review agents can only read. Pi gets read/grep/find/ls confined to the MR worktree and never loads the repo's `.pi` extensions, skills, prompts, or system prompt. Codex runs under a permission profile that denies the filesystem except read access to the worktree and minimal system paths, with no network. OpenCode ignores the repo's OpenCode config and runs with edit, bash, web fetch, and outside-directory access denied.
+- Review agents can only read. Pi gets read/grep/find/ls confined to the MR worktree and never loads the repo's `.pi` extensions, skills, prompts, or system prompt. Codex runs under a permission profile that denies the filesystem except read access to the worktree, its bare clone (so `git diff` works), the Codex install, and minimal system paths, with no network. OpenCode ignores the repo's OpenCode config and runs with edit, bash, web fetch, and outside-directory access denied.
 - Structural signals read a repo dependency-cruiser config only from `.dependency-cruiser.json`. JavaScript configs and `extends` are never executed.
 - Dashboards require `DASHBOARD_TOKEN`; without it they return 404.
 - Provider tokens are passed to git through the environment, never on the command line, so they cannot leak into error messages.

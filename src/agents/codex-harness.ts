@@ -37,18 +37,32 @@ export const resolveCodexInstallRoot = (
     : dirname(realExecutable)
 }
 
-export const buildReviewFilesystemPolicy = (codexInstallRoot: string | null): string =>
+export const resolveGitCommonDir = (cwd: string): string | null => {
+  const result = Bun.spawnSync(
+    ['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { stdout: 'pipe', stderr: 'ignore' },
+  )
+  const gitCommonDir = result.stdout.toString().trim()
+  return result.exitCode === 0 && gitCommonDir ? realpathSync(gitCommonDir) : null
+}
+
+const resolveReviewReadRoots = (cwd: string): string[] =>
+  [resolveCodexInstallRoot(), resolveGitCommonDir(cwd)].filter(
+    (root): root is string => root !== null,
+  )
+
+export const buildReviewFilesystemPolicy = (readRoots: string[]): string =>
   [
     '":root" = "deny"',
     '":minimal" = "read"',
     '":workspace_roots" = "read"',
-    ...(codexInstallRoot ? [`${JSON.stringify(codexInstallRoot)} = "read"`] : []),
+    ...readRoots.map((root) => `${JSON.stringify(root)} = "read"`),
   ].join(', ')
 
 export const buildCommand = (
   config: ReviewAgentRunConfig,
   outputFile: string,
-  codexInstallRoot: string | null = resolveCodexInstallRoot(),
+  readRoots: string[] = resolveReviewReadRoots(config.cwd),
 ): string[] => {
   const command = [
     'codex',
@@ -58,7 +72,7 @@ export const buildCommand = (
     '--config',
     `default_permissions="${REVIEW_PERMISSION_PROFILE}"`,
     '--config',
-    `permissions.${REVIEW_PERMISSION_PROFILE}.filesystem={ ${buildReviewFilesystemPolicy(codexInstallRoot)} }`,
+    `permissions.${REVIEW_PERMISSION_PROFILE}.filesystem={ ${buildReviewFilesystemPolicy(readRoots)} }`,
     '--model',
     config.model,
     '--json',
