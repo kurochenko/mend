@@ -40,6 +40,25 @@ This starts Postgres (persistent `pgdata` volume) and the Mend service on port 3
 
 To clone your projects over SSH, uncomment the `~/.ssh` mount in `docker-compose.yml`; alternatively use an HTTPS `repo_url` with an embedded token.
 
+### Codex harness in Docker
+
+Codex sandboxes each review with bubblewrap, which needs unprivileged user namespaces. Docker's default seccomp and AppArmor profiles block them, so add this to the `mend` service:
+
+```yaml
+security_opt:
+  - seccomp=unconfined
+  - apparmor=unconfined
+```
+
+On Ubuntu 23.10+ hosts, AppArmor also strips capabilities inside those namespaces, and reviews fail with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Lift the restriction on the host:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/60-userns.conf
+```
+
+This loosens a host-wide hardening setting; prefer a dedicated VM if the host runs other untrusted workloads. `docker compose exec mend unshare -Urn true` exits silently once namespaces work. Do not disable the Codex sandbox to work around these errors — it is the boundary that keeps the reviewer read-only and offline. The `pi` harness has no kernel sandbox requirement.
+
 ## Run from source
 
 Requires [Bun](https://bun.sh) ≥ 1.3.9 and Docker (for Postgres).
