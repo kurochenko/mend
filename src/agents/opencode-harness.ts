@@ -1,4 +1,10 @@
 import { authFailureMessage, extractErrorEventText, isAuthFailure } from '@/agents/auth-failure'
+import {
+  buildContext7McpLaunch,
+  CONTEXT7_API_KEY_ENV,
+  CONTEXT7_MCP_SERVER_NAME,
+} from '@/agents/context7-mcp-server'
+import type { Context7McpLaunch } from '@/agents/context7-mcp-server'
 import { toErrorMessage } from '@/lib/errors'
 
 export interface OpenCodeReviewConfig {
@@ -8,6 +14,7 @@ export interface OpenCodeReviewConfig {
   instructions: string
   prompt: string
   timeoutMs?: number
+  context7ApiKey?: string | null
   signal?: AbortSignal
 }
 
@@ -21,7 +28,22 @@ export interface OpenCodeReviewResult {
 
 const DEFAULT_TIMEOUT_MS = 300_000
 
-export const buildReviewEnv = (env: NodeJS.ProcessEnv): Record<string, string | undefined> => ({
+const buildContext7McpConfigContent = (apiKey: string, launch: Context7McpLaunch): string =>
+  JSON.stringify({
+    mcp: {
+      [CONTEXT7_MCP_SERVER_NAME]: {
+        type: 'local',
+        command: [launch.command, ...launch.args],
+        environment: { [CONTEXT7_API_KEY_ENV]: apiKey },
+      },
+    },
+  })
+
+export const buildReviewEnv = (
+  env: NodeJS.ProcessEnv,
+  context7ApiKey?: string | null,
+  context7Launch: Context7McpLaunch = buildContext7McpLaunch(),
+): Record<string, string | undefined> => ({
   ...env,
   OPENCODE_DISABLE_PROJECT_CONFIG: '1',
   OPENCODE_PERMISSION: JSON.stringify({
@@ -30,6 +52,9 @@ export const buildReviewEnv = (env: NodeJS.ProcessEnv): Record<string, string | 
     webfetch: 'deny',
     external_directory: 'deny',
   }),
+  ...(context7ApiKey
+    ? { OPENCODE_CONFIG_CONTENT: buildContext7McpConfigContent(context7ApiKey, context7Launch) }
+    : {}),
 })
 
 const buildFullPrompt = (instructions: string, prompt: string): string =>
@@ -171,7 +196,7 @@ export const invokeOpenCodeReview = async (
   try {
     const proc = Bun.spawn(command, {
       cwd: config.cwd,
-      env: buildReviewEnv(process.env),
+      env: buildReviewEnv(process.env, config.context7ApiKey),
       stdout: 'pipe',
       stderr: 'pipe',
     })

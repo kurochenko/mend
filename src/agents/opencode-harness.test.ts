@@ -39,6 +39,28 @@ describe('buildReviewEnv', () => {
   })
 })
 
+describe('buildReviewEnv Context7', () => {
+  const launch = { command: '/bin/bun', args: ['--cwd=/mend', 'server.ts'], cwd: '/mend' }
+
+  it('injects the Context7 MCP server when a key is configured', () => {
+    const env = buildReviewEnv({ PATH: '/bin' }, 'ctx7sk-key', launch)
+
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}')).toEqual({
+      mcp: {
+        context7: {
+          type: 'local',
+          command: ['/bin/bun', '--cwd=/mend', 'server.ts'],
+          environment: { CONTEXT7_API_KEY: 'ctx7sk-key' },
+        },
+      },
+    })
+  })
+
+  it('leaves OpenCode config untouched without a key', () => {
+    expect(buildReviewEnv({ PATH: '/bin' }, null, launch).OPENCODE_CONFIG_CONTENT).toBeUndefined()
+  })
+})
+
 describe('toCompletedRunResult', () => {
   const run = (stdout: string, exitCode = 0, stderr = '') =>
     toCompletedRunResult({

@@ -7,10 +7,13 @@ import {
   SettingsManager,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentSession, ToolDefinition } from '@earendil-works/pi-coding-agent'
-import { Type } from '@sinclair/typebox'
-import { z } from 'zod'
+import {
+  CONTEXT7_LOOKUP_DESCRIPTION,
+  CONTEXT7_LOOKUP_TOOL_NAME,
+  context7LookupParameters,
+  runContext7Lookup,
+} from '@/agents/context7-lookup-tool'
 import { createReadOnlyTools, isInsideRoot } from '@/agents/pi-read-only-tools'
-import { lookupContext7 } from '@/integrations/context7'
 import { authFailureMessage, isAuthFailure } from '@/agents/auth-failure'
 import { toErrorMessage } from '@/lib/errors'
 
@@ -52,33 +55,13 @@ export const toPiFailure = (
 
 const DEFAULT_TIMEOUT_MS = 1_200_000
 
-const context7LookupParameters = Type.Object({
-  query: Type.String({ minLength: 1 }),
-  library: Type.Optional(Type.String({ minLength: 1 })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-})
-
-const context7LookupInputSchema = z.object({
-  query: z.string().min(1),
-  library: z.string().min(1).optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-})
-
 const createContext7Tool = (apiKey: string): ToolDefinition => ({
-  name: 'context7_lookup',
+  name: CONTEXT7_LOOKUP_TOOL_NAME,
   label: 'Context7 Lookup',
-  description: 'Lookup library/framework documentation and best practices from Context7',
+  description: CONTEXT7_LOOKUP_DESCRIPTION,
   parameters: context7LookupParameters,
   execute: async (_toolCallId, rawParams, signal) => {
-    const params = context7LookupInputSchema.parse(rawParams)
-
-    const result = await lookupContext7({
-      query: params.query,
-      library: params.library,
-      limit: params.limit,
-      apiKey,
-      signal,
-    })
+    const result = await runContext7Lookup(rawParams, apiKey, signal)
 
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],

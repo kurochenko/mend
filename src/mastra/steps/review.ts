@@ -188,6 +188,7 @@ export const reviewStep = createStep({
       structuralSignals,
       previousReviewContext,
       memorySections,
+      context7Available: Boolean(inputData.context7ApiKey),
     })
     const prompt = DEFAULT_REVIEW_USER_PROMPT
 

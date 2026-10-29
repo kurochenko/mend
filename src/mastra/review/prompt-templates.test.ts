@@ -44,6 +44,13 @@ describe('buildReviewSystemPrompt', () => {
     expect(prompt).toContain('Review mode: initial. Verify all files changed in this MR scope')
   })
 
+  it('mentions context7_lookup only when the tool is available', () => {
+    expect(buildReviewSystemPrompt(baseInput)).not.toContain('context7_lookup')
+    expect(buildReviewSystemPrompt({ ...baseInput, context7Available: true })).toContain(
+      'The `context7_lookup` tool is available',
+    )
+  })
+
   it('includes file inspection and output schema requirements', () => {
     const prompt = buildReviewSystemPrompt(baseInput)
 
@@ -137,12 +144,6 @@ describe('buildReviewSystemPrompt', () => {
       'Before emitting a finding, re-read the exact lines you cite; every finding must include at least one file_line evidence entry',
     )
     expect(prompt).not.toContain('"meta":')
-  })
-
-  it('includes context7 tool hint', () => {
-    const prompt = buildReviewSystemPrompt(baseInput)
-
-    expect(prompt).toContain('context7_lookup')
   })
 
   it('uses consecutive wording for update mode', () => {
