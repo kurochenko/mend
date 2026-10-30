@@ -157,6 +157,7 @@ const createBaseReviewHarnesses = (): Record<BaseReviewAgentHarnessId, ReviewAge
           instructions: config.instructions,
           prompt: config.prompt,
           timeoutMs: config.timeoutMs,
+          context7ApiKey: config.toolMode === 'none' ? null : config.context7ApiKey,
           signal: config.signal,
         })
 

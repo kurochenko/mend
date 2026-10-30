@@ -1,6 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { authFailureMessage, extractErrorEventText, isAuthFailure } from '@/agents/auth-failure'
+import { CONTEXT7_LOOKUP_TOOL_NAME } from '@/agents/context7-lookup-tool'
+import {
+  buildContext7McpLaunch,
+  CONTEXT7_API_KEY_ENV,
+  CONTEXT7_MCP_SERVER_NAME,
+} from '@/agents/context7-mcp-server'
+import type { Context7McpLaunch } from '@/agents/context7-mcp-server'
 import { toErrorMessage } from '@/lib/errors'
 import type { ReviewAgentRunConfig, ReviewAgentResult } from '@/agents/review-harness'
 
@@ -60,10 +67,27 @@ export const buildReviewFilesystemPolicy = (readRoots: string[]): string =>
     ...readRoots.map((root) => `${JSON.stringify(root)} = "read"`),
   ].join(', ')
 
+const context7Enabled = (config: ReviewAgentRunConfig): boolean =>
+  Boolean(config.context7ApiKey) && config.toolMode !== 'none'
+
+export const buildContext7McpConfig = (launch: Context7McpLaunch): string[] => {
+  const prefix = `mcp_servers.${CONTEXT7_MCP_SERVER_NAME}`
+  return [
+    `${prefix}.command=${JSON.stringify(launch.command)}`,
+    `${prefix}.args=${JSON.stringify(launch.args)}`,
+    `${prefix}.cwd=${JSON.stringify(launch.cwd)}`,
+    `${prefix}.env_vars=${JSON.stringify([CONTEXT7_API_KEY_ENV])}`,
+    `${prefix}.enabled_tools=${JSON.stringify([CONTEXT7_LOOKUP_TOOL_NAME])}`,
+    `${prefix}.default_tools_approval_mode="approve"`,
+    `shell_environment_policy.exclude=${JSON.stringify([CONTEXT7_API_KEY_ENV])}`,
+  ].flatMap((entry) => ['--config', entry])
+}
+
 export const buildCommand = (
   config: ReviewAgentRunConfig,
   outputFile: string,
   readRoots: string[] = resolveReviewReadRoots(config.cwd),
+  context7Launch: Context7McpLaunch = buildContext7McpLaunch(),
 ): string[] => {
   const command = [
     'codex',
@@ -86,6 +110,10 @@ export const buildCommand = (
   const reasoningEffort = toCodexReasoningEffort(config.thinkingLevel)
   if (reasoningEffort) {
     command.push('--config', `model_reasoning_effort="${reasoningEffort}"`)
+  }
+
+  if (context7Enabled(config)) {
+    command.push(...buildContext7McpConfig(context7Launch))
   }
 
   command.push('-')
@@ -167,11 +195,20 @@ interface RunCodexProcessInput {
   timeoutMs: number
 }
 
+export const buildProcessEnv = (
+  config: ReviewAgentRunConfig,
+  env: NodeJS.ProcessEnv,
+): Record<string, string | undefined> =>
+  context7Enabled(config)
+    ? { ...env, [CONTEXT7_API_KEY_ENV]: config.context7ApiKey ?? undefined }
+    : env
+
 const runCodexProcess = async (input: RunCodexProcessInput): Promise<CodexProcessResult> => {
   const { config, command, outputFile, eventsFile, fullPrompt, timeoutMs } = input
   const startTime = Date.now()
   const proc = Bun.spawn(command, {
     cwd: config.cwd,
+    env: buildProcessEnv(config, process.env),
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',

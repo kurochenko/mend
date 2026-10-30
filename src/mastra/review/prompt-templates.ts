@@ -25,6 +25,7 @@ interface SystemPromptInput {
   structuralSignals?: StructuralSignals | null
   previousReviewContext?: PreviousReviewContext | null
   memorySections?: string[]
+  context7Available?: boolean
 }
 
 const isHighPriorityFinding = (f: PreviousFinding): boolean =>
@@ -353,8 +354,12 @@ export const buildReviewSystemPrompt = (input: SystemPromptInput): string => {
     ...(input.memorySections && input.memorySections.length > 0
       ? [...input.memorySections, '']
       : []),
-    'The `context7_lookup` tool is available to validate library/API usage against their documentation.',
-    '',
+    ...(input.context7Available
+      ? [
+          'The `context7_lookup` tool is available to validate library/API usage against their documentation.',
+          '',
+        ]
+      : []),
     'Do NOT review or comment on:',
     '- Formatting, whitespace, and import ordering',
     '- Personal style preferences without practical impact',

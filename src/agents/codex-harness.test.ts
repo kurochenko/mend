@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildCommand,
+  buildProcessEnv,
   extractInspectedChangedFilesFromEvents,
   resolveCodexInstallRoot,
   resolveGitCommonDir,
@@ -112,6 +113,63 @@ describe('buildCommand', () => {
         [],
       ),
     ).toContain('web_search="disabled"')
+  })
+})
+
+describe('Context7 MCP server', () => {
+  const launch = { command: '/bin/bun', args: ['--cwd=/mend', 'server.ts'], cwd: '/mend' }
+  const baseConfig = {
+    cwd: '/repo',
+    model: 'gpt-5.5',
+    instructions: 'Review carefully.',
+    prompt: 'Review this MR.',
+    sessionDir: '/sessions',
+  }
+
+  it('registers the auto-approved lookup tool and keeps the key out of the shell', () => {
+    const command = buildCommand(
+      { ...baseConfig, context7ApiKey: 'ctx7sk-key' },
+      '/sessions/out.txt',
+      [],
+      launch,
+    )
+
+    expect(command).toContain('mcp_servers.context7.command="/bin/bun"')
+    expect(command).toContain('mcp_servers.context7.args=["--cwd=/mend","server.ts"]')
+    expect(command).toContain('mcp_servers.context7.cwd="/mend"')
+    expect(command).toContain('mcp_servers.context7.env_vars=["CONTEXT7_API_KEY"]')
+    expect(command).toContain('mcp_servers.context7.enabled_tools=["context7_lookup"]')
+    expect(command).toContain('mcp_servers.context7.default_tools_approval_mode="approve"')
+    expect(command).toContain('shell_environment_policy.exclude=["CONTEXT7_API_KEY"]')
+    expect(command.join(' ')).not.toContain('ctx7sk-key')
+    expect(command.at(-1)).toBe('-')
+  })
+
+  it('omits the server without a key or when tools are disabled', () => {
+    const withoutKey = buildCommand(baseConfig, '/sessions/out.txt', [], launch)
+    const toolsDisabled = buildCommand(
+      { ...baseConfig, context7ApiKey: 'ctx7sk-key', toolMode: 'none' },
+      '/sessions/out.txt',
+      [],
+      launch,
+    )
+
+    expect(withoutKey.join(' ')).not.toContain('mcp_servers')
+    expect(toolsDisabled.join(' ')).not.toContain('mcp_servers')
+  })
+
+  it('passes the key to Codex only through the process environment', () => {
+    expect(
+      buildProcessEnv({ ...baseConfig, context7ApiKey: 'ctx7sk-key' }, { PATH: '/bin' }),
+    ).toEqual({ PATH: '/bin', CONTEXT7_API_KEY: 'ctx7sk-key' })
+    expect(
+      buildProcessEnv(
+        { ...baseConfig, context7ApiKey: 'ctx7sk-key', toolMode: 'none' },
+        {
+          PATH: '/bin',
+        },
+      ),
+    ).toEqual({ PATH: '/bin' })
   })
 })
 
